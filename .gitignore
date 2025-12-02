@@ -1,0 +1,34 @@
+# Secrets - NEVER commit these
+config.env
+*.secret
+*.key
+
+# Generated from template by deploy script
+wrangler.toml
+
+# Keep public/ dir but ignore contents (except .gitkeep)
+public/*
+!public/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Runtime files
+/tmp/
+*.pid
+
+# Backups (stored elsewhere)
+backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+

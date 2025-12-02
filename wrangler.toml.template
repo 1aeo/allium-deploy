@@ -1,0 +1,31 @@
+# Cloudflare Pages + Multi-Storage Configuration
+# ==============================================
+# This template is used to generate wrangler.toml at deploy time.
+# Values are pulled from config.env by the deploy script.
+#
+# DO NOT edit wrangler.toml directly - it will be overwritten.
+# Edit config.env instead, then run: ./scripts/allium-deploy-cfpages.sh
+
+name = "{{PAGES_PROJECT_NAME}}"
+compatibility_date = "{{WRANGLER_COMPATIBILITY_DATE}}"
+pages_build_output_dir = "{{PAGES_BUILD_OUTPUT_DIR}}"
+
+# R2 bucket binding (only if R2_ENABLED=true)
+{{R2_BUCKET_SECTION}}
+
+[vars]
+# Storage fetch order (comma-separated: r2, do, failover)
+STORAGE_ORDER = "{{STORAGE_ORDER}}"
+
+# DO Spaces URL (only if DO_ENABLED=true)
+{{DO_SPACES_URL_VAR}}
+
+# Failover origin URL
+FAILOVER_ORIGIN_URL = "{{FAILOVER_ORIGIN_URL}}"
+
+# Cloudflare CDN Cache TTLs
+CACHE_TTL_HTML = "{{CACHE_TTL_HTML}}"
+CACHE_TTL_STATIC = "{{CACHE_TTL_STATIC}}"
+
+# Cloudflare CDN cache purge secret
+PURGE_SECRET = "{{PURGE_SECRET}}"
