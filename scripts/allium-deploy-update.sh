@@ -54,10 +54,17 @@ purge_cdn() {
     
     log "🧹 Purging Cloudflare CDN cache..."
     
-    # Find all HTML files
+    # Find all HTML files and convert to URL paths
+    # Cache keys use directory form (foo/) not file form (foo/index.html)
     local html_files=()
     while IFS= read -r -d '' file; do
         local rel_path="${file#$source_dir/}"
+        # Convert index.html paths to directory form for cache key matching
+        if [[ "$rel_path" == */index.html ]]; then
+            rel_path="${rel_path%index.html}"
+        elif [[ "$rel_path" == "index.html" ]]; then
+            rel_path=""
+        fi
         html_files+=("$rel_path")
     done < <(find "$source_dir" -name "*.html" -type f -print0)
     
