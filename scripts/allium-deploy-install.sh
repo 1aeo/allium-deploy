@@ -78,7 +78,7 @@ echo "   Configuring rclone for R2..."
 mkdir -p ~/.config/rclone
 
 cat > ~/.config/rclone/rclone.conf << EOF
-[r2]
+[r2-metrics]
 type = s3
 provider = Cloudflare
 access_key_id = ${R2_ACCESS_KEY_ID}
@@ -91,7 +91,7 @@ chmod 600 ~/.config/rclone/rclone.conf
 
 echo "   Testing R2 connection..."
 BUCKET="${R2_BUCKET:?R2_BUCKET must be set in config.env}"
-if $RCLONE_PATH lsf "r2:$BUCKET" --max-depth 1 >/dev/null 2>&1; then
+if $RCLONE_PATH lsf "r2-metrics:$BUCKET" --max-depth 1 >/dev/null 2>&1; then
     echo "✅ R2 connection successful (bucket: $BUCKET)"
 else
     echo "⚠️  Could not connect to R2 bucket '$BUCKET'"

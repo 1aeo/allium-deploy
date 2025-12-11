@@ -13,7 +13,7 @@ if [[ -f "$DEPLOY_DIR/config.env" ]]; then
 fi
 
 LOCAL_BACKUP_DIR="${BACKUP_DIR:-$HOME/metrics-backups}"
-BUCKET="r2:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
+BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 SAFETY_BUFFER=2  # Only prune if we have KEEP + BUFFER backups

@@ -28,7 +28,7 @@ CHECKERS="${DO_RCLONE_CHECKERS:-80}"
 # DO Spaces configuration
 DO_REGION="${DO_SPACES_REGION:-nyc3}"
 DO_BUCKET_NAME="${DO_SPACES_BUCKET:?DO_SPACES_BUCKET must be set in config.env}"
-BUCKET="spaces:${DO_BUCKET_NAME}"
+BUCKET="spaces-metrics:${DO_BUCKET_NAME}"
 DO_USE_CDN="${DO_SPACES_CDN:-false}"
 
 LOCAL_BACKUP_MARKER="$LOG_DIR/last-do-local-backup-date"
@@ -44,9 +44,9 @@ ensure_spaces_remote() {
         exit 1
     fi
     
-    if ! $RCLONE listremotes 2>/dev/null | grep -q "^spaces:$"; then
-        echo "📦 Configuring rclone 'spaces' remote..."
-        $RCLONE config create spaces s3 \
+    if ! $RCLONE listremotes 2>/dev/null | grep -q "^spaces-metrics:$"; then
+        echo "📦 Configuring rclone 'spaces-metrics' remote..."
+        $RCLONE config create spaces-metrics s3 \
             provider=DigitalOcean \
             access_key_id="$do_key" \
             secret_access_key="$do_secret" \
@@ -54,9 +54,9 @@ ensure_spaces_remote() {
             acl=public-read \
             no_check_bucket=true \
             --non-interactive
-        echo "   ✅ Remote 'spaces' configured"
+        echo "   ✅ Remote 'spaces-metrics' configured"
     else
-        $RCLONE config update spaces no_check_bucket=true --non-interactive 2>/dev/null || true
+        $RCLONE config update spaces-metrics no_check_bucket=true --non-interactive 2>/dev/null || true
     fi
 }
 
