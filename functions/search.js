@@ -150,7 +150,7 @@ li { margin-bottom: 0.5rem; }
 .aroi:hover { text-decoration: underline; }
 .hint { color: #6c757d; font-style: italic; margin-bottom: 15px; }
 .text-danger { color: #dc3545; }
-.back { margin-top: 24px; }
+.back { margin: 0 0 16px 0; }
 .back a { color: #6c757d; text-decoration: none; }
 .back a:hover { color: #0066cc; }
 </style>
@@ -596,6 +596,7 @@ function search(q, idx) {
 
 function renderPage(title, content, query) {
   return HTML_HEAD_START + escapeHtml(title) + HTML_HEAD_END +
+    '<p class="back"><a href="/">← Back to home</a></p>\n' +
     `<h2>${escapeHtml(title)}</h2>\n` +
     HTML_FORM_START + escapeHtml(query || '') + HTML_FORM_END +
     '<div class="results">\n' + content + '</div>\n' + HTML_FOOTER;
