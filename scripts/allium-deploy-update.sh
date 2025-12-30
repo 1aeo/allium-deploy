@@ -112,6 +112,13 @@ log "========================================"
 log "Starting metrics update..."
 log "Storage order: $STORAGE_ORDER"
 
+# Capture current schema version before update (for change detection)
+OLD_SCHEMA_VERSION=""
+if command -v jq &>/dev/null; then
+    OLD_SCHEMA_VERSION=$(curl -sf "$SITE_URL/search-index.json" 2>/dev/null | jq -r '.meta.version // "unknown"' 2>/dev/null || echo "unknown")
+    log "Current schema version: $OLD_SCHEMA_VERSION"
+fi
+
 # Start background prune (only if less than 3 consecutive failures)
 failures=$(get_failures)
 if [ "$failures" -lt 3 ]; then
@@ -133,6 +140,25 @@ else
     increment_failures
     [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
     exit 1
+fi
+
+# Check for schema version change and auto-deploy search.js if needed
+if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
+    NEW_SCHEMA_VERSION=$(jq -r '.meta.version // "unknown"' "$OUTPUT_DIR/search-index.json" 2>/dev/null || echo "unknown")
+    
+    if [[ "$OLD_SCHEMA_VERSION" != "unknown" ]] && [[ "$NEW_SCHEMA_VERSION" != "unknown" ]] && [[ "$OLD_SCHEMA_VERSION" != "$NEW_SCHEMA_VERSION" ]]; then
+        log "⚠️  SCHEMA VERSION CHANGED: $OLD_SCHEMA_VERSION → $NEW_SCHEMA_VERSION"
+        log "⚠️  Auto-deploying search.js to match new schema..."
+        
+        if "$DEPLOY_DIR/scripts/allium-deploy-cfpages.sh" >> "$DEPLOY_DIR/logs/cfpages-deploy.log" 2>&1; then
+            log "✅ search.js auto-deployed successfully"
+        else
+            log "❌ search.js auto-deploy FAILED - manual deploy required!"
+            log "❌ Run: $DEPLOY_DIR/scripts/allium-deploy-cfpages.sh"
+        fi
+    elif [[ "$NEW_SCHEMA_VERSION" != "unknown" ]]; then
+        log "Schema version: $NEW_SCHEMA_VERSION (unchanged)"
+    fi
 fi
 
 # Step 2: Upload to storage backends (parallel)
