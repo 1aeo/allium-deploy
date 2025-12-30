@@ -507,7 +507,8 @@ function search(q, idx) {
   const cHash = idx.contactHashMap.get(qLow);
   if (cHash) return { type: 'contact', id: cHash.hash };
   
-  // 8b. Contact domain prefix (e.g., "1aeo" matches "1aeo.com")
+  // 8b. Contact domain prefix (e.g., "1aeo" → "1aeo.com", "prsv" → "prsv.ch")
+  // Before nickname check: operator page shows ALL relays, better than disambiguation
   const cDomainPrefix = idx.contactDomainPrefixMap.get(qLow);
   if (cDomainPrefix) return { type: 'contact', id: cDomainPrefix.hash };
 
