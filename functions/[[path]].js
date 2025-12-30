@@ -18,42 +18,12 @@
  *   METRICS_CONTENT - R2 bucket binding
  */
 
-// === MIME Types ===
-const MIME_TYPES = {
-  html: 'text/html; charset=utf-8',
-  css: 'text/css',
-  js: 'application/javascript',
-  json: 'application/json',
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  svg: 'image/svg+xml',
-  ico: 'image/x-icon',
-  webp: 'image/webp',
-  woff: 'font/woff',
-  woff2: 'font/woff2',
-  ttf: 'font/ttf',
-  txt: 'text/plain',
-  xml: 'application/xml',
-  pdf: 'application/pdf',
-};
-
-const STATIC_EXTENSIONS = ['css', 'js', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'woff', 'woff2', 'ttf'];
+import { getMimeType, isStaticAsset, SECURITY_HEADERS_HTML } from './_shared.js';
 
 // === Utility Functions ===
 
-function getExtension(path) {
-  return path.split('.').pop()?.toLowerCase() || '';
-}
-
-function getMimeType(path) {
-  return MIME_TYPES[getExtension(path)] || 'application/octet-stream';
-}
-
 function getCacheTTL(path, env) {
-  const ext = getExtension(path);
-  if (STATIC_EXTENSIONS.includes(ext)) {
+  if (isStaticAsset(path)) {
     return parseInt(env.CACHE_TTL_STATIC) || 86400;
   }
   return parseInt(env.CACHE_TTL_HTML) || 1800;
@@ -78,16 +48,20 @@ function getCacheKey(request) {
 
 function buildResponse(body, path, source, env) {
   const cacheTTL = getCacheTTL(path, env);
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'Content-Type': getMimeType(path),
-      'Cache-Control': `public, max-age=${cacheTTL}`,
-      'CDN-Cache-Control': `public, max-age=${cacheTTL}`,
-      'X-Served-From': source,
-      'X-Cache-TTL': String(cacheTTL),
-    },
-  });
+  const contentType = getMimeType(path);
+  const isHtml = contentType.startsWith('text/html');
+  
+  const headers = {
+    'Content-Type': contentType,
+    'Cache-Control': `public, max-age=${cacheTTL}`,
+    'CDN-Cache-Control': `public, max-age=${cacheTTL}`,
+    'X-Served-From': source,
+    'X-Cache-TTL': String(cacheTTL),
+    // Add security headers for HTML responses
+    ...(isHtml ? SECURITY_HEADERS_HTML : {}),
+  };
+  
+  return new Response(body, { status: 200, headers });
 }
 
 // === Storage Fetchers ===

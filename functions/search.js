@@ -1,0 +1,591 @@
+/**
+ * Cloudflare Pages Function - Search Handler
+ * 
+ * Handles /search?q=... requests, searches the static search-index.json,
+ * and returns redirects or disambiguation/not-found pages.
+ * 
+ * Performance Optimizations:
+ *   - Lookup maps built once per index load (O(1) lookups vs O(n) scans)
+ *   - Static values precomputed at module load time
+ *   - Sets for O(1) membership tests
+ *   - Single-pass index processing
+ *   - Precomputed lowercase nicknames (avoids repeated toLowerCase in scans)
+ *   - Combined linear scans (prefix + contains in one pass)
+ * 
+ * Security Features:
+ *   - Input validation (length limit, character allowlist)
+ *   - XSS prevention (HTML escaping)
+ *   - Open redirect prevention (path allowlist)
+ *   - Security headers (CSP, X-Frame-Options, etc.)
+ *   - ReDoS-safe regex patterns (all O(n) complexity)
+ *   - Generic error messages (no internal details exposed)
+ */
+
+import { CONTENT_TYPE_HTML, SECURITY_HEADERS_HTML, escapeHtml } from './_shared.js';
+
+// =============================================================================
+// PRECOMPUTED CONSTANTS (computed once at module load)
+// =============================================================================
+
+const MAX_QUERY_LENGTH = 100;
+const INDEX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_RESULTS = 20;
+
+// Precompiled regex patterns (ReDoS-safe, all O(n) complexity)
+const RE_ALLOWED_CHARS = /^[\w\s.\-:@]+$/;
+const RE_FULL_FINGERPRINT = /^[A-Fa-f0-9]{40}$/;
+const RE_PARTIAL_FINGERPRINT = /^[A-Fa-f0-9]{6,39}$/;
+const RE_AS_NUMBER = /^(?:AS)?(\d{1,10})$/i;
+const RE_COUNTRY_CODE = /^[A-Za-z]{2}$/;
+const RE_IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+const RE_IPV6_CHARS = /^[A-Fa-f0-9:]+$/;
+const RE_SAFE_PATH = /^[\w-]+$/;
+
+// Fallback Sets for O(1) membership lookups (used when index doesn't provide them)
+const DEFAULT_PLATFORMS = Object.freeze(['linux', 'freebsd', 'windows', 'darwin', 'openbsd', 'netbsd', 'sunos']);
+const DEFAULT_FLAGS = Object.freeze(['authority', 'badexit', 'exit', 'fast', 'guard', 'hsdir', 'named', 'running', 'stable', 'v2dir', 'valid']);
+
+// Path prefixes for redirect validation (Array - we need startsWith, not Set membership)
+const SAFE_REDIRECT_PREFIXES = Object.freeze(['/relay/', '/family/', '/contact/', '/as/', '/country/', '/platform/', '/flag/', '/first_seen/']);
+
+// Precomputed frozen headers object (reused for all HTML responses)
+const RESPONSE_HEADERS = Object.freeze({
+  'Content-Type': CONTENT_TYPE_HTML,
+  ...SECURITY_HEADERS_HTML,
+});
+
+// Result type to URL path segment (DRY: single source of truth)
+const RESULT_TYPE_PATHS = Object.freeze({
+  relay: 'relay',
+  family: 'family',
+  contact: 'contact',
+  as: 'as',
+  country: 'country',
+  platform: 'platform',
+  flag: 'flag',
+});
+
+// =============================================================================
+// HTML TEMPLATES (self-contained, no external CSS dependencies)
+// =============================================================================
+
+const HTML_HEAD_START = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>`;
+
+// Self-contained CSS - no Bootstrap dependency
+const HTML_HEAD_END = ` - Allium</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.6;
+  color: #212529;
+  background: #fff;
+  padding: 40px 20px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+h2, h4 { margin: 0 0 1rem; color: #333; }
+a { color: #0066cc; }
+a:hover { color: #004499; }
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+ul { padding-left: 1.5rem; }
+li { margin-bottom: 0.5rem; }
+.search-box { margin-bottom: 30px; }
+.input-group { display: flex; gap: 8px; }
+.form-control {
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 1rem;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  outline: none;
+}
+.form-control:focus { border-color: #0066cc; box-shadow: 0 0 0 2px rgba(0,102,204,0.15); }
+.btn {
+  padding: 10px 20px;
+  font-size: 1rem;
+  font-weight: 500;
+  color: #fff;
+  background: #0066cc;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn:hover { background: #0052a3; }
+.results { margin-top: 20px; }
+.result-item {
+  padding: 12px;
+  border-bottom: 1px solid #e9ecef;
+  transition: background 0.15s;
+}
+.result-item:hover { background: #f8f9fa; }
+.result-item a { text-decoration: none; display: block; }
+.result-item strong { color: #212529; }
+.fp { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; color: #6c757d; }
+.hint { color: #6c757d; font-style: italic; margin-bottom: 15px; }
+.text-danger { color: #dc3545; }
+.back { margin-top: 24px; }
+.back a { color: #6c757d; text-decoration: none; }
+.back a:hover { color: #0066cc; }
+</style>
+</head>
+<body>
+`;
+
+const HTML_FORM_START = `<div class="search-box">
+<form action="/search" method="get">
+<div class="input-group">
+<input type="text" name="q" class="form-control" placeholder="Search by fingerprint, nickname, AS, country, IP..." value="`;
+
+const HTML_FORM_END = `" maxlength="${MAX_QUERY_LENGTH}" autofocus>
+<button class="btn" type="submit">Search</button>
+</div>
+</form>
+</div>
+`;
+
+const HTML_FOOTER = `<p class="back"><a href="/">← Back to home</a></p>
+</body>
+</html>`;
+
+const HTML_ERROR_BODY = `<h2>Search Temporarily Unavailable</h2>
+<p>Please try again in a few moments.</p>
+`;
+
+const HTML_TIPS = `<h4>Search Tips</h4>
+<ul>
+<li><strong>Fingerprint:</strong> 6+ hex characters (e.g., <code>ABCD1234</code>)</li>
+<li><strong>Nickname:</strong> Relay name (e.g., <code>MyRelay</code>)</li>
+<li><strong>AS Number:</strong> With or without prefix (e.g., <code>AS24940</code> or <code>24940</code>)</li>
+<li><strong>Country:</strong> Code or name (e.g., <code>de</code> or <code>Germany</code>)</li>
+<li><strong>IP Address:</strong> IPv4 or IPv6</li>
+<li><strong>Contact:</strong> AROI domain (e.g., <code>example.org</code>)</li>
+</ul>
+`;
+
+// =============================================================================
+// INDEX CACHE WITH PRECOMPUTED LOOKUP MAPS
+// =============================================================================
+
+let cachedIndex = null;
+let cacheExpiry = 0;
+
+/**
+ * Build optimized lookup structures from raw index.
+ * Single pass over each array for efficiency.
+ * 
+ * Schema: Allium v1.3 search-index.json
+ *   - relays: [{f, n, a, c, as, cc, ip, fam}]
+ *   - families: [{id, sz, nn, px, pxg, a, c, as, cc, fs}]
+ *   - lookups: {as_names, country_names, platforms, flags}
+ * 
+ * @param {object} raw - Raw index data from search-index.json
+ * @returns {object} Frozen lookup structure
+ * @throws {Error} If index format is invalid
+ */
+function buildLookupMaps(raw) {
+  // Schema validation
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Invalid index format: expected object');
+  }
+  
+  const relays = Array.isArray(raw.relays) ? raw.relays : [];
+  const families = Array.isArray(raw.families) ? raw.families : [];
+  const lookups = raw.lookups || {};
+  
+  // O(1) lookup maps
+  const fpMap = new Map();
+  const nickMap = new Map();  // lowercase nickname -> relay
+  const ipMap = new Map();
+  const asSet = new Set();
+  const asNameMap = new Map();  // AS number -> name (for display)
+  const ccSet = new Set();
+  const ccNameMap = new Map();  // country name -> code
+  const contactDomainMap = new Map();  // aroi domain -> {hash, relay/family}
+  const contactHashMap = new Map();    // contact md5 -> {hash}
+  const familyIdMap = new Map();
+  const familyPrefixMap = new Map();   // non-generic prefix -> family
+  const familyNickMap = new Map();     // lowercase nickname -> family (from nn dict)
+  
+  // Precomputed lowercase nicknames for efficient scanning
+  const nickLower = new Array(relays.length);
+
+  // Single pass over relays - build fp, nick, ip, contact maps
+  for (let i = 0; i < relays.length; i++) {
+    const r = relays[i];
+    // Precompute lowercase nickname once
+    nickLower[i] = r.n ? r.n.toLowerCase() : '';
+    
+    if (r.f) fpMap.set(r.f, r);
+    if (r.n && !nickMap.has(nickLower[i])) nickMap.set(nickLower[i], r);
+    if (r.as) asSet.add(r.as.toUpperCase());
+    if (r.cc) ccSet.add(r.cc.toLowerCase());
+    if (r.ip) {
+      const ips = Array.isArray(r.ip) ? r.ip : [r.ip];
+      for (let j = 0; j < ips.length; j++) ipMap.set(ips[j], r);
+    }
+    // Contact from relay: a = aroi domain, c = contact md5
+    if (r.a && r.c) {
+      contactDomainMap.set(r.a.toLowerCase(), { hash: r.c });
+      contactHashMap.set(r.c.toLowerCase(), { hash: r.c });
+    }
+  }
+
+  // Process families - build family maps and contact data
+  for (let i = 0; i < families.length; i++) {
+    const f = families[i];
+    if (f.id) familyIdMap.set(f.id, f);
+    
+    // Family prefix (px) - only index non-generic prefixes for direct search
+    // pxg=true means generic prefix (relay, tor, etc.) - skip those
+    if (f.px && !f.pxg) {
+      familyPrefixMap.set(f.px.toLowerCase(), f);
+    }
+    
+    // Family nicknames (nn) - dict with lowercase keys already in v1.3
+    // Used for "search by family member nickname" feature
+    if (f.nn && typeof f.nn === 'object') {
+      for (const nickLow of Object.keys(f.nn)) {
+        if (!familyNickMap.has(nickLow)) {
+          familyNickMap.set(nickLow, f);
+        }
+      }
+    }
+    
+    // Contact from family
+    if (f.a && f.c && Array.isArray(f.c) && f.c.length > 0) {
+      contactDomainMap.set(f.a.toLowerCase(), { hash: f.c[0] });
+      for (const hash of f.c) {
+        contactHashMap.set(hash.toLowerCase(), { hash });
+      }
+    }
+  }
+
+  // AS names from lookups (v1.3: lookups.as_names dict)
+  const asNames = lookups.as_names || {};
+  for (const [asNum, asName] of Object.entries(asNames)) {
+    const normalized = asNum.toUpperCase();
+    asSet.add(normalized);
+    asNameMap.set(normalized, asName);
+  }
+
+  // Country names from lookups (v1.3: lookups.country_names dict)
+  const countryNames = lookups.country_names || {};
+  for (const [code, name] of Object.entries(countryNames)) {
+    const codeLow = code.toLowerCase();
+    ccSet.add(codeLow);
+    ccNameMap.set(name.toLowerCase(), codeLow);
+  }
+  
+  // Dynamic platforms/flags from lookups (v1.3 path: lookups.platforms/flags)
+  const platformSet = Array.isArray(lookups.platforms) 
+    ? new Set(lookups.platforms.map(p => p.toLowerCase()))
+    : new Set(DEFAULT_PLATFORMS);
+  const flagSet = Array.isArray(lookups.flags)
+    ? new Set(lookups.flags.map(f => f.toLowerCase()))
+    : new Set(DEFAULT_FLAGS);
+
+  return Object.freeze({
+    relays,
+    families,
+    nickLower,  // Precomputed lowercase nicknames
+    fpMap,
+    nickMap,
+    ipMap,
+    asSet,
+    asNameMap,
+    ccSet,
+    ccNameMap,
+    contactDomainMap,
+    contactHashMap,
+    familyIdMap,
+    familyPrefixMap,
+    familyNickMap,  // Family nickname search
+    platformSet,
+    flagSet,
+  });
+}
+
+async function loadIndex(origin) {
+  const now = Date.now();
+  if (cachedIndex && now < cacheExpiry) return cachedIndex;
+  
+  const res = await fetch(`${origin}/search-index.json`, {
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  
+  // Specific error handling for common cases
+  if (res.status === 404) {
+    throw new Error('Search index not found. Ensure allium generates search-index.json.');
+  }
+  if (!res.ok) {
+    throw new Error(`Index load failed: HTTP ${res.status}`);
+  }
+  
+  let raw;
+  try {
+    raw = await res.json();
+  } catch (e) {
+    throw new Error('Search index is not valid JSON');
+  }
+  
+  cachedIndex = buildLookupMaps(raw);
+  cacheExpiry = now + INDEX_CACHE_TTL_MS;
+  return cachedIndex;
+}
+
+// =============================================================================
+// INPUT VALIDATION
+// =============================================================================
+
+function validateQuery(raw) {
+  if (!raw || typeof raw !== 'string') return { ok: false, q: '', err: 'empty' };
+  const q = raw.trim();
+  if (!q) return { ok: false, q: '', err: 'empty' };
+  if (q.length > MAX_QUERY_LENGTH) return { ok: false, q: '', err: `Query too long (max ${MAX_QUERY_LENGTH} chars)` };
+  if (!RE_ALLOWED_CHARS.test(q)) return { ok: false, q: '', err: 'Query contains invalid characters' };
+  return { ok: true, q, err: '' };
+}
+
+function isSafePath(s) {
+  return s && s.length <= 100 && RE_SAFE_PATH.test(s);
+}
+
+// =============================================================================
+// RESPONSE HELPERS
+// =============================================================================
+
+function htmlResponse(body, status) {
+  return new Response(body, { status, headers: RESPONSE_HEADERS });
+}
+
+function safeRedirect(origin, path) {
+  // Validate against prefix allowlist
+  let ok = false;
+  for (let i = 0; i < SAFE_REDIRECT_PREFIXES.length; i++) {
+    if (path.startsWith(SAFE_REDIRECT_PREFIXES[i])) { ok = true; break; }
+  }
+  if (!ok || path.includes('://') || path.startsWith('//')) {
+    console.error('Blocked redirect:', path);
+    return new Response('Invalid redirect', { status: 400 });
+  }
+  return Response.redirect(new URL(path, origin).href, 302);
+}
+
+function handleError(err, q) {
+  console.error('Search error:', { msg: err.message, q: q?.slice(0, 50) });
+  return htmlResponse(HTML_HEAD_START + 'Error' + HTML_HEAD_END + HTML_ERROR_BODY + HTML_FOOTER, 503);
+}
+
+// =============================================================================
+// SEARCH LOGIC
+// =============================================================================
+
+/**
+ * Map relay to result format for disambiguation.
+ */
+function relayResult(r) {
+  return { t: 'relay', f: r.f, n: r.n, cc: r.cc };
+}
+
+/**
+ * Search index with optimized lookups.
+ * Fast O(1) checks first, linear scans only as fallback.
+ */
+function search(q, idx) {
+  // 1. Full fingerprint - O(1) Map lookup
+  if (RE_FULL_FINGERPRINT.test(q)) {
+    const qUp = q.toUpperCase();
+    const relay = idx.fpMap.get(qUp);
+    if (relay) return { type: 'relay', id: relay.f };
+    const family = idx.familyIdMap.get(qUp);
+    if (family) return { type: 'family', id: family.id };
+    return { type: 'not_found' };
+  }
+
+  // 2. Partial fingerprint - scan Map keys
+  if (RE_PARTIAL_FINGERPRINT.test(q)) {
+    const qUp = q.toUpperCase();
+    const matches = [];
+    for (const [fp, r] of idx.fpMap) {
+      if (fp.startsWith(qUp)) {
+        matches.push(r);
+        if (matches.length > MAX_RESULTS) break;
+      }
+    }
+    if (matches.length === 1) return { type: 'relay', id: matches[0].f };
+    if (matches.length > 1) {
+      return { type: 'multiple', matches: matches.slice(0, MAX_RESULTS).map(relayResult), hint: 'Multiple relays match this fingerprint prefix' };
+    }
+  }
+
+  const qLow = q.toLowerCase();
+
+  // 3. AS number - O(1) Set lookup
+  const asMatch = q.match(RE_AS_NUMBER);
+  if (asMatch) {
+    const asNum = 'AS' + asMatch[1];
+    if (idx.asSet.has(asNum)) return { type: 'as', id: asNum };
+  }
+
+  // 4. Country code - O(1) Set lookup
+  if (RE_COUNTRY_CODE.test(q) && idx.ccSet.has(qLow)) {
+    return { type: 'country', id: qLow };
+  }
+
+  // 5. Country name - O(1) Map lookup
+  const ccByName = idx.ccNameMap.get(qLow);
+  if (ccByName) return { type: 'country', id: ccByName };
+
+  // 6. Platform - O(1) Set lookup (dynamic from index or fallback)
+  if (idx.platformSet.has(qLow)) return { type: 'platform', id: qLow };
+
+  // 7. Flag - O(1) Set lookup (dynamic from index or fallback)
+  if (idx.flagSet.has(qLow)) return { type: 'flag', id: qLow };
+
+  // 8. Contact domain/hash - O(1) Map lookups
+  const cDomain = idx.contactDomainMap.get(qLow);
+  if (cDomain) return { type: 'contact', id: cDomain.hash };
+  const cHash = idx.contactHashMap.get(qLow);
+  if (cHash) return { type: 'contact', id: cHash.hash };
+
+  // 9. IP address - O(1) Map lookup
+  if (RE_IPV4.test(q) || (q.includes(':') && RE_IPV6_CHARS.test(q))) {
+    const relay = idx.ipMap.get(q);
+    if (relay) return { type: 'relay', id: relay.f };
+  }
+
+  // 10. Exact nickname - O(1) Map lookup
+  const exactNick = idx.nickMap.get(qLow);
+  if (exactNick) return { type: 'relay', id: exactNick.f };
+
+  // 11. Family prefix - O(1) Map lookup (non-generic prefixes only)
+  const famByPrefix = idx.familyPrefixMap.get(qLow);
+  if (famByPrefix) return { type: 'family', id: famByPrefix.id };
+
+  // 12. Family nickname - O(1) Map lookup (from nn dict, keys already lowercase)
+  const famByNick = idx.familyNickMap.get(qLow);
+  if (famByNick) return { type: 'family', id: famByNick.id };
+
+  // 13. Nickname prefix/contains - Combined single pass with precomputed lowercase
+  const prefixMatches = [];
+  const containsMatches = [];
+  const relays = idx.relays;
+  const nickLower = idx.nickLower;  // Precomputed lowercase nicknames
+  const maxContains = MAX_RESULTS * 2;
+  
+  for (let i = 0; i < relays.length; i++) {
+    const nLow = nickLower[i];
+    if (!nLow) continue;
+    
+    if (nLow.startsWith(qLow)) {
+      prefixMatches.push(relays[i]);
+      // Early exit: enough prefix matches found
+      if (prefixMatches.length > MAX_RESULTS) break;
+    } else if (containsMatches.length <= maxContains && nLow.includes(qLow)) {
+      containsMatches.push(relays[i]);
+    }
+    
+    // Early exit: have enough of both types
+    if (prefixMatches.length >= MAX_RESULTS && containsMatches.length >= maxContains) break;
+  }
+
+  // Prefer prefix matches over contains
+  if (prefixMatches.length === 1) return { type: 'relay', id: prefixMatches[0].f };
+  if (prefixMatches.length > 1) {
+    // Check if all share same family
+    let famId = null, sameFam = true;
+    for (let i = 0; i < prefixMatches.length && sameFam; i++) {
+      const f = prefixMatches[i].fam;
+      if (!f) { sameFam = false; }
+      else if (!famId) { famId = f; }
+      else if (famId !== f) { sameFam = false; }
+    }
+    if (sameFam && famId) return { type: 'family', id: famId };
+    return { type: 'multiple', matches: prefixMatches.slice(0, MAX_RESULTS).map(relayResult), hint: `Multiple relays match "${q}"` };
+  }
+
+  // Fall back to contains matches
+  if (containsMatches.length === 1) return { type: 'relay', id: containsMatches[0].f };
+  if (containsMatches.length > 1 && containsMatches.length <= MAX_RESULTS * 2) {
+    return { type: 'multiple', matches: containsMatches.slice(0, MAX_RESULTS).map(relayResult), hint: `Found ${containsMatches.length} relays containing "${q}"` };
+  }
+
+  return { type: 'not_found' };
+}
+
+// =============================================================================
+// PAGE RENDERING
+// =============================================================================
+
+function renderPage(title, content, query) {
+  return HTML_HEAD_START + escapeHtml(title) + HTML_HEAD_END +
+    `<h2>${escapeHtml(title)}</h2>\n` +
+    HTML_FORM_START + escapeHtml(query || '') + HTML_FORM_END +
+    '<div class="results">\n' + content + '</div>\n' + HTML_FOOTER;
+}
+
+function renderDisambiguation(matches, query, hint) {
+  let content = hint ? `<p class="hint">${escapeHtml(hint)}</p>\n` : '';
+  
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (m.t === 'relay') {
+      const name = escapeHtml(m.n || 'Unnamed');
+      const fp = escapeHtml(m.f);
+      const cc = m.cc ? escapeHtml(m.cc.toUpperCase()) + ' ' : '';
+      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong><br><span class="fp">${cc}${fp}</span></a></div>\n`;
+    }
+  }
+  
+  return htmlResponse(renderPage('Search Results', content, query), 200);
+}
+
+function renderNotFound(query) {
+  const content = `<p>No relays, families, or operators found matching "<strong>${escapeHtml(query)}</strong>".</p>\n` + HTML_TIPS;
+  return htmlResponse(renderPage('No Results Found', content, query), 404);
+}
+
+function renderInvalid(error) {
+  const content = `<p class="text-danger">${escapeHtml(error)}</p>\n`;
+  return htmlResponse(renderPage('Invalid Search Query', content, ''), 400);
+}
+
+// =============================================================================
+// REQUEST HANDLER
+// =============================================================================
+
+export async function onRequestGet(ctx) {
+  const url = new URL(ctx.request.url);
+  const { ok, q, err } = validateQuery(url.searchParams.get('q'));
+  
+  if (!ok) {
+    return err === 'empty' ? Response.redirect(url.origin + '/', 302) : renderInvalid(err);
+  }
+  
+  try {
+    const idx = await loadIndex(url.origin);
+    const result = search(q, idx);
+    
+    // Direct redirect for single-match types
+    const pathType = RESULT_TYPE_PATHS[result.type];
+    if (pathType && result.id) {
+      if (!isSafePath(result.id)) return handleError(new Error('Invalid ID'), q);
+      return safeRedirect(url.origin, `/${pathType}/${result.id}/`);
+    }
+    
+    // Multiple matches
+    if (result.type === 'multiple') {
+      return renderDisambiguation(result.matches, q, result.hint);
+    }
+    
+    return renderNotFound(q);
+  } catch (e) {
+    return handleError(e, q);
+  }
+}
