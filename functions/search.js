@@ -45,6 +45,25 @@ const RE_SAFE_PATH = /^[\w-]+$/;
 const DEFAULT_PLATFORMS = Object.freeze(['linux', 'freebsd', 'windows', 'darwin', 'openbsd', 'netbsd', 'sunos']);
 const DEFAULT_FLAGS = Object.freeze(['authority', 'badexit', 'exit', 'fast', 'guard', 'hsdir', 'named', 'running', 'stable', 'v2dir', 'valid']);
 
+// Country name aliases for common variations
+const COUNTRY_ALIASES = Object.freeze({
+  'united states': 'us',
+  'usa': 'us',
+  'uk': 'gb',
+  'united kingdom': 'gb',
+  'great britain': 'gb',
+  'britain': 'gb',
+  'england': 'gb',
+  'holland': 'nl',
+  'the netherlands': 'nl',
+  'czech republic': 'cz',
+  'czechia': 'cz',
+  'south korea': 'kr',
+  'korea': 'kr',
+  'russia': 'ru',
+  'russian federation': 'ru',
+});
+
 // Path prefixes for redirect validation (Array - we need startsWith, not Set membership)
 const SAFE_REDIRECT_PREFIXES = Object.freeze(['/relay/', '/family/', '/contact/', '/as/', '/country/', '/platform/', '/flag/', '/first_seen/']);
 
@@ -200,14 +219,16 @@ function buildLookupMaps(raw) {
   
   // O(1) lookup maps
   const fpMap = new Map();
-  const nickMap = new Map();  // lowercase nickname -> relay
+  const nickMap = new Map();       // lowercase nickname -> relay (first match)
+  const nickMultiMap = new Map();  // lowercase nickname -> [relays] (for disambiguation)
   const ipMap = new Map();
   const asSet = new Set();
   const asNameMap = new Map();  // AS number -> name (for display)
   const ccSet = new Set();
   const ccNameMap = new Map();  // country name -> code
-  const contactDomainMap = new Map();  // aroi domain -> {hash, relay/family}
-  const contactHashMap = new Map();    // contact md5 -> {hash}
+  const contactDomainMap = new Map();    // aroi domain -> {hash}
+  const contactDomainPrefixMap = new Map(); // domain prefix (without TLD) -> {hash}
+  const contactHashMap = new Map();      // contact md5 -> {hash}
   const familyIdMap = new Map();
   const familyPrefixMap = new Map();   // non-generic prefix -> family
   const familyNickMap = new Map();     // lowercase nickname -> family (from nn dict)
@@ -222,7 +243,14 @@ function buildLookupMaps(raw) {
     nickLower[i] = r.n ? r.n.toLowerCase() : '';
     
     if (r.f) fpMap.set(r.f, r);
-    if (r.n && !nickMap.has(nickLower[i])) nickMap.set(nickLower[i], r);
+    if (r.n) {
+      const nLow = nickLower[i];
+      // Track first match for quick single-result lookup
+      if (!nickMap.has(nLow)) nickMap.set(nLow, r);
+      // Track all matches for disambiguation
+      if (!nickMultiMap.has(nLow)) nickMultiMap.set(nLow, []);
+      nickMultiMap.get(nLow).push(r);
+    }
     if (r.as) asSet.add(r.as.toUpperCase());
     if (r.cc) ccSet.add(r.cc.toLowerCase());
     if (r.ip) {
@@ -231,8 +259,18 @@ function buildLookupMaps(raw) {
     }
     // Contact from relay: a = aroi domain, c = contact md5
     if (r.a && r.c) {
-      contactDomainMap.set(r.a.toLowerCase(), { hash: r.c });
+      const domainLow = r.a.toLowerCase();
+      contactDomainMap.set(domainLow, { hash: r.c });
       contactHashMap.set(r.c.toLowerCase(), { hash: r.c });
+      // Also index domain prefix (without TLD) for partial matching
+      // e.g., "1aeo.com" -> "1aeo" and "example.co.uk" -> "example"
+      const dotIdx = domainLow.indexOf('.');
+      if (dotIdx > 0) {
+        const prefix = domainLow.slice(0, dotIdx);
+        if (!contactDomainPrefixMap.has(prefix)) {
+          contactDomainPrefixMap.set(prefix, { hash: r.c });
+        }
+      }
     }
   }
 
@@ -259,9 +297,18 @@ function buildLookupMaps(raw) {
     
     // Contact from family
     if (f.a && f.c && Array.isArray(f.c) && f.c.length > 0) {
-      contactDomainMap.set(f.a.toLowerCase(), { hash: f.c[0] });
+      const domainLow = f.a.toLowerCase();
+      contactDomainMap.set(domainLow, { hash: f.c[0] });
       for (const hash of f.c) {
         contactHashMap.set(hash.toLowerCase(), { hash });
+      }
+      // Also index domain prefix (without TLD)
+      const dotIdx = domainLow.indexOf('.');
+      if (dotIdx > 0) {
+        const prefix = domainLow.slice(0, dotIdx);
+        if (!contactDomainPrefixMap.has(prefix)) {
+          contactDomainPrefixMap.set(prefix, { hash: f.c[0] });
+        }
       }
     }
   }
@@ -296,12 +343,14 @@ function buildLookupMaps(raw) {
     nickLower,  // Precomputed lowercase nicknames
     fpMap,
     nickMap,
+    nickMultiMap,  // For disambiguation of same-name relays
     ipMap,
     asSet,
     asNameMap,
     ccSet,
     ccNameMap,
     contactDomainMap,
+    contactDomainPrefixMap,  // Domain prefix matching (e.g., "1aeo" matches "1aeo.com")
     contactHashMap,
     familyIdMap,
     familyPrefixMap,
@@ -433,14 +482,18 @@ function search(q, idx) {
     if (idx.asSet.has(asNum)) return { type: 'as', id: asNum };
   }
 
-  // 4. Country code - O(1) Set lookup
+  // 4. Country code - O(1) Set lookup (return UPPERCASE for URL paths)
   if (RE_COUNTRY_CODE.test(q) && idx.ccSet.has(qLow)) {
-    return { type: 'country', id: qLow };
+    return { type: 'country', id: qLow.toUpperCase() };
   }
 
   // 5. Country name - O(1) Map lookup
   const ccByName = idx.ccNameMap.get(qLow);
-  if (ccByName) return { type: 'country', id: ccByName };
+  if (ccByName) return { type: 'country', id: ccByName.toUpperCase() };
+
+  // 5b. Country aliases (e.g., "united states" -> "us", "uk" -> "gb")
+  const ccByAlias = COUNTRY_ALIASES[qLow];
+  if (ccByAlias) return { type: 'country', id: ccByAlias.toUpperCase() };
 
   // 6. Platform - O(1) Set lookup (dynamic from index or fallback)
   if (idx.platformSet.has(qLow)) return { type: 'platform', id: qLow };
@@ -453,6 +506,10 @@ function search(q, idx) {
   if (cDomain) return { type: 'contact', id: cDomain.hash };
   const cHash = idx.contactHashMap.get(qLow);
   if (cHash) return { type: 'contact', id: cHash.hash };
+  
+  // 8b. Contact domain prefix (e.g., "1aeo" matches "1aeo.com")
+  const cDomainPrefix = idx.contactDomainPrefixMap.get(qLow);
+  if (cDomainPrefix) return { type: 'contact', id: cDomainPrefix.hash };
 
   // 9. IP address - O(1) Map lookup
   if (RE_IPV4.test(q) || (q.includes(':') && RE_IPV6_CHARS.test(q))) {
@@ -460,9 +517,19 @@ function search(q, idx) {
     if (relay) return { type: 'relay', id: relay.f };
   }
 
-  // 10. Exact nickname - O(1) Map lookup
-  const exactNick = idx.nickMap.get(qLow);
-  if (exactNick) return { type: 'relay', id: exactNick.f };
+  // 10. Exact nickname - O(1) Map lookup with disambiguation for duplicates
+  const exactNickMatches = idx.nickMultiMap.get(qLow);
+  if (exactNickMatches) {
+    if (exactNickMatches.length === 1) {
+      return { type: 'relay', id: exactNickMatches[0].f };
+    }
+    // Multiple relays with same nickname - show disambiguation
+    return { 
+      type: 'multiple', 
+      matches: exactNickMatches.slice(0, MAX_RESULTS).map(relayResult), 
+      hint: `${exactNickMatches.length} relays named "${q}"` 
+    };
+  }
 
   // 11. Family prefix - O(1) Map lookup (non-generic prefixes only)
   const famByPrefix = idx.familyPrefixMap.get(qLow);
