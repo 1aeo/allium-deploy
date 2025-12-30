@@ -179,6 +179,11 @@ let cacheExpiry = 0;
  * Build optimized lookup structures from raw index.
  * Single pass over each array for efficiency.
  * 
+ * Schema: Allium v1.3 search-index.json
+ *   - relays: [{f, n, a, c, as, cc, ip, fam}]
+ *   - families: [{id, sz, nn, px, pxg, a, c, as, cc, fs}]
+ *   - lookups: {as_names, country_names, platforms, flags}
+ * 
  * @param {object} raw - Raw index data from search-index.json
  * @returns {object} Frozen lookup structure
  * @throws {Error} If index format is invalid
@@ -190,23 +195,27 @@ function buildLookupMaps(raw) {
   }
   
   const relays = Array.isArray(raw.relays) ? raw.relays : [];
+  const families = Array.isArray(raw.families) ? raw.families : [];
+  const lookups = raw.lookups || {};
   
   // O(1) lookup maps
   const fpMap = new Map();
   const nickMap = new Map();  // lowercase nickname -> relay
   const ipMap = new Map();
   const asSet = new Set();
+  const asNameMap = new Map();  // AS number -> name (for display)
   const ccSet = new Set();
-  const ccNameMap = new Map();
-  const contactDomainMap = new Map();
-  const contactHashMap = new Map();
+  const ccNameMap = new Map();  // country name -> code
+  const contactDomainMap = new Map();  // aroi domain -> {hash, relay/family}
+  const contactHashMap = new Map();    // contact md5 -> {hash}
   const familyIdMap = new Map();
-  const familyPrefixMap = new Map();
+  const familyPrefixMap = new Map();   // non-generic prefix -> family
+  const familyNickMap = new Map();     // lowercase nickname -> family (from nn dict)
   
   // Precomputed lowercase nicknames for efficient scanning
   const nickLower = new Array(relays.length);
 
-  // Single pass over relays
+  // Single pass over relays - build fp, nick, ip, contact maps
   for (let i = 0; i < relays.length; i++) {
     const r = relays[i];
     // Precompute lowercase nickname once
@@ -220,62 +229,85 @@ function buildLookupMaps(raw) {
       const ips = Array.isArray(r.ip) ? r.ip : [r.ip];
       for (let j = 0; j < ips.length; j++) ipMap.set(ips[j], r);
     }
+    // Contact from relay: a = aroi domain, c = contact md5
+    if (r.a && r.c) {
+      contactDomainMap.set(r.a.toLowerCase(), { hash: r.c });
+      contactHashMap.set(r.c.toLowerCase(), { hash: r.c });
+    }
   }
 
-  // AS entries
-  const asList = Array.isArray(raw.autonomous_systems) ? raw.autonomous_systems : [];
-  for (let i = 0; i < asList.length; i++) {
-    const a = asList[i];
-    if (a.num) asSet.add(a.num.toUpperCase());
-  }
-
-  // Countries
-  const countries = Array.isArray(raw.countries) ? raw.countries : [];
-  for (let i = 0; i < countries.length; i++) {
-    const c = countries[i];
-    if (c.code) ccSet.add(c.code.toLowerCase());
-    if (c.name && c.code) ccNameMap.set(c.name.toLowerCase(), c.code.toLowerCase());
-  }
-
-  // Contacts
-  const contacts = Array.isArray(raw.contacts) ? raw.contacts : [];
-  for (let i = 0; i < contacts.length; i++) {
-    const c = contacts[i];
-    if (c.domain) contactDomainMap.set(c.domain.toLowerCase(), c);
-    if (c.hash) contactHashMap.set(c.hash.toLowerCase(), c);
-  }
-
-  // Families
-  const families = Array.isArray(raw.families) ? raw.families : [];
+  // Process families - build family maps and contact data
   for (let i = 0; i < families.length; i++) {
     const f = families[i];
     if (f.id) familyIdMap.set(f.id, f);
-    if (f.prefix) familyPrefixMap.set(f.prefix.toLowerCase(), f);
+    
+    // Family prefix (px) - only index non-generic prefixes for direct search
+    // pxg=true means generic prefix (relay, tor, etc.) - skip those
+    if (f.px && !f.pxg) {
+      familyPrefixMap.set(f.px.toLowerCase(), f);
+    }
+    
+    // Family nicknames (nn) - dict with lowercase keys already in v1.3
+    // Used for "search by family member nickname" feature
+    if (f.nn && typeof f.nn === 'object') {
+      for (const nickLow of Object.keys(f.nn)) {
+        if (!familyNickMap.has(nickLow)) {
+          familyNickMap.set(nickLow, f);
+        }
+      }
+    }
+    
+    // Contact from family
+    if (f.a && f.c && Array.isArray(f.c) && f.c.length > 0) {
+      contactDomainMap.set(f.a.toLowerCase(), { hash: f.c[0] });
+      for (const hash of f.c) {
+        contactHashMap.set(hash.toLowerCase(), { hash });
+      }
+    }
+  }
+
+  // AS names from lookups (v1.3: lookups.as_names dict)
+  const asNames = lookups.as_names || {};
+  for (const [asNum, asName] of Object.entries(asNames)) {
+    const normalized = asNum.toUpperCase();
+    asSet.add(normalized);
+    asNameMap.set(normalized, asName);
+  }
+
+  // Country names from lookups (v1.3: lookups.country_names dict)
+  const countryNames = lookups.country_names || {};
+  for (const [code, name] of Object.entries(countryNames)) {
+    const codeLow = code.toLowerCase();
+    ccSet.add(codeLow);
+    ccNameMap.set(name.toLowerCase(), codeLow);
   }
   
-  // Dynamic platforms/flags from index (option A) with hardcoded fallback (option B)
-  const platformSet = Array.isArray(raw.platforms) 
-    ? new Set(raw.platforms.map(p => p.toLowerCase()))
+  // Dynamic platforms/flags from lookups (v1.3 path: lookups.platforms/flags)
+  const platformSet = Array.isArray(lookups.platforms) 
+    ? new Set(lookups.platforms.map(p => p.toLowerCase()))
     : new Set(DEFAULT_PLATFORMS);
-  const flagSet = Array.isArray(raw.flags)
-    ? new Set(raw.flags.map(f => f.toLowerCase()))
+  const flagSet = Array.isArray(lookups.flags)
+    ? new Set(lookups.flags.map(f => f.toLowerCase()))
     : new Set(DEFAULT_FLAGS);
 
   return Object.freeze({
     relays,
+    families,
     nickLower,  // Precomputed lowercase nicknames
     fpMap,
     nickMap,
     ipMap,
     asSet,
+    asNameMap,
     ccSet,
     ccNameMap,
     contactDomainMap,
     contactHashMap,
     familyIdMap,
     familyPrefixMap,
-    platformSet,  // Dynamic from index or fallback
-    flagSet,      // Dynamic from index or fallback
+    familyNickMap,  // Family nickname search
+    platformSet,
+    flagSet,
   });
 }
 
@@ -432,11 +464,15 @@ function search(q, idx) {
   const exactNick = idx.nickMap.get(qLow);
   if (exactNick) return { type: 'relay', id: exactNick.f };
 
-  // 11. Family prefix - O(1) Map lookup
+  // 11. Family prefix - O(1) Map lookup (non-generic prefixes only)
   const famByPrefix = idx.familyPrefixMap.get(qLow);
   if (famByPrefix) return { type: 'family', id: famByPrefix.id };
 
-  // 12. Nickname prefix/contains - Combined single pass with precomputed lowercase
+  // 12. Family nickname - O(1) Map lookup (from nn dict, keys already lowercase)
+  const famByNick = idx.familyNickMap.get(qLow);
+  if (famByNick) return { type: 'family', id: famByNick.id };
+
+  // 13. Nickname prefix/contains - Combined single pass with precomputed lowercase
   const prefixMatches = [];
   const containsMatches = [];
   const relays = idx.relays;
