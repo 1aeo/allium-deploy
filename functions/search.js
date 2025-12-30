@@ -143,9 +143,9 @@ li { margin-bottom: 0.5rem; }
   transition: background 0.15s;
 }
 .result-item:hover { background: #f8f9fa; }
-.result-item a { text-decoration: none; display: block; }
+.result-item a { text-decoration: none; color: inherit; }
 .result-item strong { color: #212529; }
-.fp { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; color: #6c757d; }
+.fp { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; color: #6c757d; display: block; margin-top: 2px; }
 .aroi { font-size: 0.85em; color: #198754; font-weight: 500; text-decoration: none; }
 .aroi:hover { text-decoration: underline; }
 .hint { color: #6c757d; font-style: italic; margin-bottom: 15px; }
@@ -614,7 +614,7 @@ function renderDisambiguation(matches, query, hint) {
       const aroi = (m.a && m.c) 
         ? ` · <a href="/contact/${escapeHtml(m.c)}/" class="aroi">${escapeHtml(m.a)}</a>` 
         : '';
-      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<br><a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
+      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
     }
   }
   
