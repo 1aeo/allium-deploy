@@ -109,11 +109,9 @@ body {
   margin: 0 auto;
 }
 h2, h4 { margin: 0 0 1rem; color: #333; }
-a { color: #0066cc; }
-a:hover { color: #004499; }
+a { color: #0066cc; } a:hover { color: #004499; }
 code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-ul { padding-left: 1.5rem; }
-li { margin-bottom: 0.5rem; }
+ul { padding-left: 1.5rem; } li { margin-bottom: 0.5rem; }
 .search-box { margin-bottom: 30px; }
 .input-group { display: flex; gap: 8px; }
 .form-control {
@@ -143,16 +141,11 @@ li { margin-bottom: 0.5rem; }
   transition: background 0.15s;
 }
 .result-item:hover { background: #f8f9fa; }
-.result-item a { text-decoration: none; color: inherit; }
-.result-item strong { color: #212529; }
+.result-item a { text-decoration: none; color: inherit; } .result-item strong { color: #212529; }
 .fp { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; color: #6c757d; display: block; margin-top: 2px; }
-.aroi { font-size: 0.85em; color: #198754; font-weight: 500; text-decoration: none; }
-.aroi:hover { text-decoration: underline; }
-.hint { color: #6c757d; font-style: italic; margin-bottom: 15px; }
-.text-danger { color: #dc3545; }
-.back { margin: 0 0 16px 0; }
-.back a { color: #6c757d; text-decoration: none; }
-.back a:hover { color: #0066cc; }
+.aroi { font-size: 0.85em; color: #198754; font-weight: 500; text-decoration: none; } .aroi:hover { text-decoration: underline; }
+.hint { color: #6c757d; font-style: italic; margin-bottom: 15px; } .text-danger { color: #dc3545; }
+.back { margin: 0 0 16px 0; } .back a { color: #6c757d; text-decoration: none; } .back a:hover { color: #0066cc; }
 </style>
 </head>
 <body>
@@ -221,35 +214,36 @@ function buildLookupMaps(raw) {
   
   // O(1) lookup maps
   const fpMap = new Map();
-  const nickMap = new Map();       // lowercase nickname -> relay (first match)
   const nickMultiMap = new Map();  // lowercase nickname -> [relays] (for disambiguation)
   const ipMap = new Map();
   const asSet = new Set();
-  const asNameMap = new Map();  // AS number -> name (for display)
+  const asNameMap = new Map();
   const ccSet = new Set();
-  const ccNameMap = new Map();  // country name -> code
-  const contactDomainMap = new Map();    // aroi domain -> {hash}
-  const contactDomainPrefixMap = new Map(); // domain prefix (without TLD) -> {hash}
-  const contactHashMap = new Map();      // contact md5 -> {hash}
+  const ccNameMap = new Map();
+  const contactDomainMap = new Map();
+  const contactDomainPrefixMap = new Map();
+  const contactHashMap = new Map();
   const familyIdMap = new Map();
-  const familyPrefixMap = new Map();   // non-generic prefix -> family
-  const familyNickMap = new Map();     // lowercase nickname -> family (from nn dict)
+  const familyPrefixMap = new Map();
+  const familyNickMap = new Map();
+  
+  // Helper: extract domain prefix (e.g., "1aeo.com" -> "1aeo")
+  const getDomainPrefix = (domain) => {
+    const dotIdx = domain.indexOf('.');
+    return dotIdx > 0 ? domain.slice(0, dotIdx) : null;
+  };
   
   // Precomputed lowercase nicknames for efficient scanning
   const nickLower = new Array(relays.length);
 
-  // Single pass over relays - build fp, nick, ip, contact maps
+  // Single pass over relays
   for (let i = 0; i < relays.length; i++) {
     const r = relays[i];
-    // Precompute lowercase nickname once
     nickLower[i] = r.n ? r.n.toLowerCase() : '';
     
     if (r.f) fpMap.set(r.f, r);
     if (r.n) {
       const nLow = nickLower[i];
-      // Track first match for quick single-result lookup
-      if (!nickMap.has(nLow)) nickMap.set(nLow, r);
-      // Track all matches for disambiguation
       if (!nickMultiMap.has(nLow)) nickMultiMap.set(nLow, []);
       nickMultiMap.get(nLow).push(r);
     }
@@ -259,106 +253,61 @@ function buildLookupMaps(raw) {
       const ips = Array.isArray(r.ip) ? r.ip : [r.ip];
       for (let j = 0; j < ips.length; j++) ipMap.set(ips[j], r);
     }
-    // Contact from relay: a = aroi domain, c = contact md5
     if (r.a && r.c) {
       const domainLow = r.a.toLowerCase();
       contactDomainMap.set(domainLow, { hash: r.c });
       contactHashMap.set(r.c.toLowerCase(), { hash: r.c });
-      // Also index domain prefix (without TLD) for partial matching
-      // e.g., "1aeo.com" -> "1aeo" and "example.co.uk" -> "example"
-      const dotIdx = domainLow.indexOf('.');
-      if (dotIdx > 0) {
-        const prefix = domainLow.slice(0, dotIdx);
-        if (!contactDomainPrefixMap.has(prefix)) {
-          contactDomainPrefixMap.set(prefix, { hash: r.c });
-        }
+      const prefix = getDomainPrefix(domainLow);
+      if (prefix && !contactDomainPrefixMap.has(prefix)) {
+        contactDomainPrefixMap.set(prefix, { hash: r.c });
       }
     }
   }
 
-  // Process families - build family maps and contact data
+  // Process families
   for (let i = 0; i < families.length; i++) {
     const f = families[i];
     if (f.id) familyIdMap.set(f.id, f);
-    
-    // Family prefix (px) - only index non-generic prefixes for direct search
-    // pxg=true means generic prefix (relay, tor, etc.) - skip those
-    if (f.px && !f.pxg) {
-      familyPrefixMap.set(f.px.toLowerCase(), f);
-    }
-    
-    // Family nicknames (nn) - dict with lowercase keys already in v1.3
-    // Used for "search by family member nickname" feature
+    if (f.px && !f.pxg) familyPrefixMap.set(f.px.toLowerCase(), f);
     if (f.nn && typeof f.nn === 'object') {
       for (const nickLow of Object.keys(f.nn)) {
-        if (!familyNickMap.has(nickLow)) {
-          familyNickMap.set(nickLow, f);
-        }
+        if (!familyNickMap.has(nickLow)) familyNickMap.set(nickLow, f);
       }
     }
-    
-    // Contact from family
     if (f.a && f.c && Array.isArray(f.c) && f.c.length > 0) {
       const domainLow = f.a.toLowerCase();
       contactDomainMap.set(domainLow, { hash: f.c[0] });
-      for (const hash of f.c) {
-        contactHashMap.set(hash.toLowerCase(), { hash });
-      }
-      // Also index domain prefix (without TLD)
-      const dotIdx = domainLow.indexOf('.');
-      if (dotIdx > 0) {
-        const prefix = domainLow.slice(0, dotIdx);
-        if (!contactDomainPrefixMap.has(prefix)) {
-          contactDomainPrefixMap.set(prefix, { hash: f.c[0] });
-        }
+      for (const hash of f.c) contactHashMap.set(hash.toLowerCase(), { hash });
+      const prefix = getDomainPrefix(domainLow);
+      if (prefix && !contactDomainPrefixMap.has(prefix)) {
+        contactDomainPrefixMap.set(prefix, { hash: f.c[0] });
       }
     }
   }
 
-  // AS names from lookups (v1.3: lookups.as_names dict)
-  const asNames = lookups.as_names || {};
-  for (const [asNum, asName] of Object.entries(asNames)) {
-    const normalized = asNum.toUpperCase();
-    asSet.add(normalized);
-    asNameMap.set(normalized, asName);
+  // AS names from lookups
+  for (const [asNum, asName] of Object.entries(lookups.as_names || {})) {
+    const norm = asNum.toUpperCase();
+    asSet.add(norm);
+    asNameMap.set(norm, asName);
   }
 
-  // Country names from lookups (v1.3: lookups.country_names dict)
-  const countryNames = lookups.country_names || {};
-  for (const [code, name] of Object.entries(countryNames)) {
+  // Country names from lookups
+  for (const [code, name] of Object.entries(lookups.country_names || {})) {
     const codeLow = code.toLowerCase();
     ccSet.add(codeLow);
     ccNameMap.set(name.toLowerCase(), codeLow);
   }
   
-  // Dynamic platforms/flags from lookups (v1.3 path: lookups.platforms/flags)
-  const platformSet = Array.isArray(lookups.platforms) 
-    ? new Set(lookups.platforms.map(p => p.toLowerCase()))
-    : new Set(DEFAULT_PLATFORMS);
-  const flagSet = Array.isArray(lookups.flags)
-    ? new Set(lookups.flags.map(f => f.toLowerCase()))
-    : new Set(DEFAULT_FLAGS);
+  // Platforms/flags from lookups or defaults
+  const platformSet = new Set((lookups.platforms || DEFAULT_PLATFORMS).map(p => p.toLowerCase()));
+  const flagSet = new Set((lookups.flags || DEFAULT_FLAGS).map(f => f.toLowerCase()));
 
   return Object.freeze({
-    relays,
-    families,
-    nickLower,  // Precomputed lowercase nicknames
-    fpMap,
-    nickMap,
-    nickMultiMap,  // For disambiguation of same-name relays
-    ipMap,
-    asSet,
-    asNameMap,
-    ccSet,
-    ccNameMap,
-    contactDomainMap,
-    contactDomainPrefixMap,  // Domain prefix matching (e.g., "1aeo" matches "1aeo.com")
-    contactHashMap,
-    familyIdMap,
-    familyPrefixMap,
-    familyNickMap,  // Family nickname search
-    platformSet,
-    flagSet,
+    relays, families, nickLower, fpMap, nickMultiMap, ipMap,
+    asSet, asNameMap, ccSet, ccNameMap,
+    contactDomainMap, contactDomainPrefixMap, contactHashMap,
+    familyIdMap, familyPrefixMap, familyNickMap, platformSet, flagSet,
   });
 }
 
