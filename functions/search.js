@@ -146,7 +146,8 @@ li { margin-bottom: 0.5rem; }
 .result-item a { text-decoration: none; display: block; }
 .result-item strong { color: #212529; }
 .fp { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; color: #6c757d; }
-.aroi { font-size: 0.85em; color: #198754; font-weight: 500; }
+.aroi { font-size: 0.85em; color: #198754; font-weight: 500; text-decoration: none; }
+.aroi:hover { text-decoration: underline; }
 .hint { color: #6c757d; font-style: italic; margin-bottom: 15px; }
 .text-danger { color: #dc3545; }
 .back { margin-top: 24px; }
@@ -438,10 +439,10 @@ function handleError(err, q) {
 
 /**
  * Map relay to result format for disambiguation.
- * Includes AROI (validated contact domain) if available.
+ * Includes AROI (validated contact domain) and contact hash if available.
  */
 function relayResult(r) {
-  return { t: 'relay', f: r.f, n: r.n, cc: r.cc, a: r.a || null };
+  return { t: 'relay', f: r.f, n: r.n, cc: r.cc, a: r.a || null, c: r.c || null };
 }
 
 /**
@@ -609,9 +610,11 @@ function renderDisambiguation(matches, query, hint) {
       const name = escapeHtml(m.n || 'Unnamed');
       const fp = escapeHtml(m.f);
       const cc = m.cc ? escapeHtml(m.cc.toUpperCase()) + ' ' : '';
-      // Show AROI (validated contact domain) if available
-      const aroi = m.a ? ` · <span class="aroi">${escapeHtml(m.a)}</span>` : '';
-      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong>${aroi}<br><span class="fp">${cc}${fp}</span></a></div>\n`;
+      // Show AROI (validated contact domain) as link to contact page
+      const aroi = (m.a && m.c) 
+        ? ` · <a href="/contact/${escapeHtml(m.c)}/" class="aroi">${escapeHtml(m.a)}</a>` 
+        : '';
+      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<br><a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
     }
   }
   
