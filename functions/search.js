@@ -560,7 +560,12 @@ function renderInvalid(error) {
 // REQUEST HANDLER
 // =============================================================================
 
-export async function onRequestGet(ctx) {
+export async function onRequest(ctx) {
+  // Only handle GET and HEAD requests
+  if (ctx.request.method !== 'GET' && ctx.request.method !== 'HEAD') {
+    return new Response('Method not allowed', { status: 405 });
+  }
+  
   const url = new URL(ctx.request.url);
   const { ok, q, err } = validateQuery(url.searchParams.get('q'));
   
