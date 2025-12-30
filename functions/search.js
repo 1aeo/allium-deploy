@@ -39,7 +39,7 @@ const RE_AS_NUMBER = /^(?:AS)?(\d{1,10})$/i;
 const RE_COUNTRY_CODE = /^[A-Za-z]{2}$/;
 const RE_IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const RE_IPV6_CHARS = /^[A-Fa-f0-9:]+$/;
-const RE_SAFE_PATH = /^[\w-]+$/;
+const RE_SAFE_PATH = /^[\w.-]+$/;  // Allow dots for domain paths
 
 // Fallback Sets for O(1) membership lookups (used when index doesn't provide them)
 const DEFAULT_PLATFORMS = Object.freeze(['linux', 'freebsd', 'windows', 'darwin', 'openbsd', 'netbsd', 'sunos']);
@@ -74,10 +74,12 @@ const RESPONSE_HEADERS = Object.freeze({
 });
 
 // Result type to URL path segment (DRY: single source of truth)
+// Empty string = ID is the full path (e.g., aroi domain "1aeo.com" → /1aeo.com/)
 const RESULT_TYPE_PATHS = Object.freeze({
   relay: 'relay',
   family: 'family',
   contact: 'contact',
+  aroi: '',  // Domain IS the path: /{domain}/
   as: 'as',
   country: 'country',
   platform: 'platform',
@@ -255,11 +257,12 @@ function buildLookupMaps(raw) {
     }
     if (r.a && r.c) {
       const domainLow = r.a.toLowerCase();
-      contactDomainMap.set(domainLow, { hash: r.c });
-      contactHashMap.set(r.c.toLowerCase(), { hash: r.c });
+      const contact = { domain: r.a, hash: r.c };  // Store both, domain is primary
+      contactDomainMap.set(domainLow, contact);
+      contactHashMap.set(r.c.toLowerCase(), contact);
       const prefix = getDomainPrefix(domainLow);
       if (prefix && !contactDomainPrefixMap.has(prefix)) {
-        contactDomainPrefixMap.set(prefix, { hash: r.c });
+        contactDomainPrefixMap.set(prefix, contact);
       }
     }
   }
@@ -276,11 +279,12 @@ function buildLookupMaps(raw) {
     }
     if (f.a && f.c && Array.isArray(f.c) && f.c.length > 0) {
       const domainLow = f.a.toLowerCase();
-      contactDomainMap.set(domainLow, { hash: f.c[0] });
-      for (const hash of f.c) contactHashMap.set(hash.toLowerCase(), { hash });
+      const contact = { domain: f.a, hash: f.c[0] };  // Store both, domain is primary
+      contactDomainMap.set(domainLow, contact);
+      for (const hash of f.c) contactHashMap.set(hash.toLowerCase(), contact);
       const prefix = getDomainPrefix(domainLow);
       if (prefix && !contactDomainPrefixMap.has(prefix)) {
-        contactDomainPrefixMap.set(prefix, { hash: f.c[0] });
+        contactDomainPrefixMap.set(prefix, contact);
       }
     }
   }
@@ -365,11 +369,13 @@ function htmlResponse(body, status) {
 }
 
 function safeRedirect(origin, path) {
-  // Validate against prefix allowlist
+  // Validate against prefix allowlist OR domain-style path (e.g., /1aeo.com/)
   let ok = false;
   for (let i = 0; i < SAFE_REDIRECT_PREFIXES.length; i++) {
     if (path.startsWith(SAFE_REDIRECT_PREFIXES[i])) { ok = true; break; }
   }
+  // Allow domain-style paths: /domain.tld/ (must have dot, validated by RE_SAFE_PATH)
+  if (!ok && path.includes('.') && /^\/[\w.-]+\/$/.test(path)) ok = true;
   if (!ok || path.includes('://') || path.startsWith('//')) {
     console.error('Blocked redirect:', path);
     return new Response('Invalid redirect', { status: 400 });
@@ -388,7 +394,6 @@ function handleError(err, q) {
 
 /**
  * Map relay to result format for disambiguation.
- * Includes AROI (validated contact domain) and contact hash if available.
  */
 function relayResult(r) {
   return { t: 'relay', f: r.f, n: r.n, cc: r.cc, a: r.a || null, c: r.c || null };
@@ -453,16 +458,15 @@ function search(q, idx) {
   // 7. Flag - O(1) Set lookup (dynamic from index or fallback)
   if (idx.flagSet.has(qLow)) return { type: 'flag', id: qLow };
 
-  // 8. Contact domain/hash - O(1) Map lookups
+  // 8. Contact domain/hash - O(1) Map lookups → redirect to /{domain}/ (fallback: /contact/{hash}/)
   const cDomain = idx.contactDomainMap.get(qLow);
-  if (cDomain) return { type: 'contact', id: cDomain.hash };
+  if (cDomain) return { type: 'aroi', id: cDomain.domain, fallback: cDomain.hash };
   const cHash = idx.contactHashMap.get(qLow);
-  if (cHash) return { type: 'contact', id: cHash.hash };
+  if (cHash) return { type: 'aroi', id: cHash.domain, fallback: cHash.hash };
   
-  // 8b. Contact domain prefix (e.g., "1aeo" → "1aeo.com", "prsv" → "prsv.ch")
-  // Before nickname check: operator page shows ALL relays, better than disambiguation
+  // 8b. Contact domain prefix (e.g., "1aeo" → /1aeo.com/, "prsv" → /prsv.ch/)
   const cDomainPrefix = idx.contactDomainPrefixMap.get(qLow);
-  if (cDomainPrefix) return { type: 'contact', id: cDomainPrefix.hash };
+  if (cDomainPrefix) return { type: 'aroi', id: cDomainPrefix.domain, fallback: cDomainPrefix.hash };
 
   // 9. IP address - O(1) Map lookup
   if (RE_IPV4.test(q) || (q.includes(':') && RE_IPV6_CHARS.test(q))) {
@@ -560,10 +564,9 @@ function renderDisambiguation(matches, query, hint) {
       const name = escapeHtml(m.n || 'Unnamed');
       const fp = escapeHtml(m.f);
       const cc = m.cc ? escapeHtml(m.cc.toUpperCase()) + ' ' : '';
-      // Show AROI (validated contact domain) as link to contact page
-      const aroi = (m.a && m.c) 
-        ? ` · <a href="/contact/${escapeHtml(m.c)}/" class="aroi">${escapeHtml(m.a)}</a>` 
-        : '';
+      // Show AROI as link: /{domain}/ primary, /contact/{hash}/ fallback
+      const aroiHref = m.a ? `/${escapeHtml(m.a)}/` : (m.c ? `/contact/${escapeHtml(m.c)}/` : null);
+      const aroi = aroiHref ? ` · <a href="${aroiHref}" class="aroi">${escapeHtml(m.a || m.c)}</a>` : '';
       content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
     }
   }
@@ -604,9 +607,17 @@ export async function onRequest(ctx) {
     
     // Direct redirect for single-match types
     const pathType = RESULT_TYPE_PATHS[result.type];
-    if (pathType && result.id) {
-      if (!isSafePath(result.id)) return handleError(new Error('Invalid ID'), q);
-      return safeRedirect(url.origin, `/${pathType}/${result.id}/`);
+    if (pathType !== undefined && result.id) {
+      if (!isSafePath(result.id)) {
+        // Fallback to hash-based URL if domain path is invalid
+        if (result.fallback && isSafePath(result.fallback)) {
+          return safeRedirect(url.origin, `/contact/${result.fallback}/`);
+        }
+        return handleError(new Error('Invalid ID'), q);
+      }
+      // Empty pathType means ID is the full path (e.g., aroi: /1aeo.com/)
+      const path = pathType ? `/${pathType}/${result.id}/` : `/${result.id}/`;
+      return safeRedirect(url.origin, path);
     }
     
     // Multiple matches
