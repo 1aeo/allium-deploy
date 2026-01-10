@@ -86,6 +86,23 @@ const RESULT_TYPE_PATHS = Object.freeze({
   flag: 'flag',
 });
 
+// Error codes for detailed diagnostics
+const ERR = Object.freeze({
+  INDEX_404: 'INDEX_404',
+  INDEX_HTTP: 'INDEX_HTTP',
+  INDEX_JSON: 'INDEX_JSON',
+  INDEX_SCHEMA: 'INDEX_SCHEMA',
+  UNKNOWN: 'UNKNOWN',
+});
+
+// Helper: create error with code and details
+function searchError(code, message, details) {
+  const err = new Error(message);
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
 // =============================================================================
 // HTML TEMPLATES (self-contained, no external CSS dependencies)
 // =============================================================================
@@ -168,10 +185,6 @@ const HTML_FORM_END = `" maxlength="${MAX_QUERY_LENGTH}" autofocus>
 const HTML_FOOTER = `<p class="back"><a href="/">← Back to home</a></p>
 </body>
 </html>`;
-
-const HTML_ERROR_BODY = `<h2>Search Temporarily Unavailable</h2>
-<p>Please try again in a few moments.</p>
-`;
 
 const HTML_TIPS = `<h4>Search Tips</h4>
 <ul>
@@ -319,26 +332,39 @@ async function loadIndex(origin) {
   const now = Date.now();
   if (cachedIndex && now < cacheExpiry) return cachedIndex;
   
-  const res = await fetch(`${origin}/search-index.json`, {
-    cf: { cacheTtl: 300, cacheEverything: true },
-  });
+  let res;
+  try {
+    res = await fetch(`${origin}/search-index.json`, {
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+  } catch (e) {
+    throw searchError(ERR.INDEX_HTTP, 'Network error fetching index', e.message);
+  }
   
-  // Specific error handling for common cases
   if (res.status === 404) {
-    throw new Error('Search index not found. Ensure allium generates search-index.json.');
+    throw searchError(ERR.INDEX_404, 'search-index.json not found (HTTP 404)',
+      'Index file missing. Site may be updating or allium failed to generate it.');
   }
   if (!res.ok) {
-    throw new Error(`Index load failed: HTTP ${res.status}`);
+    throw searchError(ERR.INDEX_HTTP, `Index fetch failed (HTTP ${res.status})`,
+      `Server returned ${res.status} ${res.statusText || ''}.`);
   }
   
   let raw;
   try {
     raw = await res.json();
   } catch (e) {
-    throw new Error('Search index is not valid JSON');
+    throw searchError(ERR.INDEX_JSON, 'Failed to parse index as JSON',
+      `${e.message}. File may be corrupted or truncated.`);
   }
   
-  cachedIndex = buildLookupMaps(raw);
+  try {
+    cachedIndex = buildLookupMaps(raw);
+  } catch (e) {
+    throw searchError(ERR.INDEX_SCHEMA, 'Index schema validation failed',
+      `${e.message}. Index version may not match search function.`);
+  }
+  
   cacheExpiry = now + INDEX_CACHE_TTL_MS;
   return cachedIndex;
 }
@@ -383,9 +409,14 @@ function safeRedirect(origin, path) {
   return Response.redirect(new URL(path, origin).href, 302);
 }
 
-function handleError(err, q) {
-  console.error('Search error:', { msg: err.message, q: q?.slice(0, 50) });
-  return htmlResponse(HTML_HEAD_START + 'Error' + HTML_HEAD_END + HTML_ERROR_BODY + HTML_FOOTER, 503);
+function handleError(err, query) {
+  console.error('Search error:', {
+    code: err.code || ERR.UNKNOWN,
+    message: err.message,
+    details: err.details,
+    query: query?.slice(0, 50),
+  });
+  return renderError(err, query);
 }
 
 // =============================================================================
@@ -582,6 +613,21 @@ function renderNotFound(query) {
 function renderInvalid(error) {
   const content = `<p class="text-danger">${escapeHtml(error)}</p>\n`;
   return htmlResponse(renderPage('Invalid Search Query', content, ''), 400);
+}
+
+function renderError(err, query) {
+  const code = err.code || ERR.UNKNOWN;
+  const message = err.message || 'Unknown error';
+  const details = err.details || '';
+  const timestamp = new Date().toISOString();
+  
+  const content = 
+    `<p><strong>Error ${escapeHtml(code)}:</strong> ${escapeHtml(message)}</p>\n` +
+    (details ? `<p>${escapeHtml(details)}</p>\n` : '') +
+    `<p class="hint">Timestamp: ${timestamp}</p>\n` +
+    `<p class="hint">If this persists, try again in a few minutes.</p>\n`;
+  
+  return htmlResponse(renderPage('Search Error', content, query), 503);
 }
 
 // =============================================================================

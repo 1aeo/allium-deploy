@@ -54,6 +54,13 @@ purge_cdn() {
     
     log "🧹 Purging Cloudflare CDN cache..."
     
+    # Purge search-index.json first (must be fresh before any page loads)
+    log "   Purging search-index.json..."
+    curl -s -X POST "${site_url}/_purge" \
+        -H "X-Purge-Secret: ${purge_secret}" \
+        -H "Content-Type: application/json" \
+        -d '{"urls": ["search-index.json"]}' >/dev/null 2>&1 || true
+    
     # Find all HTML files and convert to URL paths
     # Cache keys use directory form (foo/) not file form (foo/index.html)
     local html_files=()
