@@ -595,8 +595,8 @@ function renderDisambiguation(matches, query, hint) {
       const name = escapeHtml(m.n || 'Unnamed');
       const fp = escapeHtml(m.f);
       const cc = m.cc ? escapeHtml(m.cc.toUpperCase()) + ' ' : '';
-      // Show AROI as link: /{domain}/ primary, /contact/{hash}/ fallback
-      const aroiHref = m.a ? `/${escapeHtml(m.a)}/` : (m.c ? `/contact/${escapeHtml(m.c)}/` : null);
+      // Show AROI as link to contact page (always works, even for misconfigured domains)
+      const aroiHref = m.c ? `/contact/${escapeHtml(m.c)}/` : null;
       const aroi = aroiHref ? ` · <a href="${aroiHref}" class="aroi">${escapeHtml(m.a || m.c)}</a>` : '';
       content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
     }
@@ -634,6 +634,25 @@ function renderError(err, query) {
 // REQUEST HANDLER
 // =============================================================================
 
+/**
+ * Check if an AROI domain page exists (validated operator).
+ * Uses HEAD request with edge caching for efficiency.
+ * @param {string} origin - Site origin
+ * @param {string} domain - AROI domain (e.g., "1aeo.com")
+ * @returns {Promise<boolean>} True if page exists
+ */
+async function aroiPageExists(origin, domain) {
+  try {
+    const res = await fetch(`${origin}/${domain}/`, {
+      method: 'HEAD',
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function onRequest(ctx) {
   // Only handle GET and HEAD requests
   if (ctx.request.method !== 'GET' && ctx.request.method !== 'HEAD') {
@@ -651,18 +670,28 @@ export async function onRequest(ctx) {
     const idx = await loadIndex(url.origin);
     const result = search(q, idx);
     
-    // Direct redirect for single-match types
+    // Handle AROI results: check if domain page exists, fallback to contact hash
+    if (result.type === 'aroi') {
+      if (result.id && isSafePath(result.id)) {
+        const exists = await aroiPageExists(url.origin, result.id);
+        if (exists) {
+          return safeRedirect(url.origin, `/${result.id}/`);
+        }
+      }
+      // Domain page doesn't exist or invalid - fall back to contact hash
+      if (result.fallback && isSafePath(result.fallback)) {
+        return safeRedirect(url.origin, `/contact/${result.fallback}/`);
+      }
+      return handleError(new Error('Invalid AROI result'), q);
+    }
+    
+    // Direct redirect for other single-match types
     const pathType = RESULT_TYPE_PATHS[result.type];
     if (pathType !== undefined && result.id) {
       if (!isSafePath(result.id)) {
-        // Fallback to hash-based URL if domain path is invalid
-        if (result.fallback && isSafePath(result.fallback)) {
-          return safeRedirect(url.origin, `/contact/${result.fallback}/`);
-        }
         return handleError(new Error('Invalid ID'), q);
       }
-      // Empty pathType means ID is the full path (e.g., aroi: /1aeo.com/)
-      const path = pathType ? `/${pathType}/${result.id}/` : `/${result.id}/`;
+      const path = `/${pathType}/${result.id}/`;
       return safeRedirect(url.origin, path);
     }
     
