@@ -319,12 +319,19 @@ function buildLookupMaps(raw) {
   // Platforms/flags from lookups or defaults
   const platformSet = new Set((lookups.platforms || DEFAULT_PLATFORMS).map(p => p.toLowerCase()));
   const flagSet = new Set((lookups.flags || DEFAULT_FLAGS).map(f => f.toLowerCase()));
+  
+  // Validated AROI domains from lookups (v1.5+ index)
+  // Used for O(1) validation check before redirecting to /{domain}/
+  const validatedAroiSet = lookups.validated_aroi_domains 
+    ? new Set(lookups.validated_aroi_domains.map(d => d.toLowerCase()))
+    : null;  // null indicates index doesn't have this data (fallback to storage check)
 
   return Object.freeze({
     relays, families, nickLower, fpMap, nickMultiMap, ipMap,
     asSet, asNameMap, ccSet, ccNameMap,
     contactDomainMap, contactDomainPrefixMap, contactHashMap,
     familyIdMap, familyPrefixMap, familyNickMap, platformSet, flagSet,
+    validatedAroiSet,
   });
 }
 
@@ -635,12 +642,26 @@ function renderError(err, query) {
 // =============================================================================
 
 /**
+ * Check if an AROI domain is validated using the search index.
+ * This is the fast path - O(1) Set lookup, no I/O.
+ * 
+ * @param {object} idx - Search index with validatedAroiSet
+ * @param {string} domain - AROI domain (e.g., "1aeo.com")
+ * @returns {boolean|null} true if validated, false if not, null if index doesn't have the data
+ */
+function isAroiValidatedInIndex(idx, domain) {
+  // Check if index has validated_aroi_domains (v1.5+)
+  if (!idx.validatedAroiSet) return null; // Index doesn't have this data
+  return idx.validatedAroiSet.has(domain.toLowerCase());
+}
+
+/**
  * Check if an AROI domain page exists in R2 storage.
- * Returns true if the page exists, false otherwise.
+ * Fallback for when index doesn't have validated_aroi_domains.
  * 
  * @param {object} env - Environment bindings
  * @param {string} domain - AROI domain (e.g., "1aeo.com")
- * @returns {Promise<boolean>}
+ * @returns {Promise<boolean|null>} true if exists, false if not, null if R2 not configured
  */
 async function aroiPageExistsInR2(env, domain) {
   if (!env?.METRICS_CONTENT) return null; // R2 not configured
@@ -657,11 +678,11 @@ async function aroiPageExistsInR2(env, domain) {
 
 /**
  * Check if an AROI domain page exists in DO Spaces.
- * Returns true if the page exists, false otherwise.
+ * Fallback for when index doesn't have validated_aroi_domains and R2 not configured.
  * 
  * @param {object} env - Environment bindings
  * @param {string} domain - AROI domain (e.g., "1aeo.com")
- * @returns {Promise<boolean>}
+ * @returns {Promise<boolean|null>} true if exists, false if not, null if DO not configured
  */
 async function aroiPageExistsInSpaces(env, domain) {
   const baseUrl = env?.DO_SPACES_URL;
@@ -682,16 +703,28 @@ async function aroiPageExistsInSpaces(env, domain) {
 
 /**
  * Check if an AROI domain is validated (has a page generated).
- * Checks storage backends in configured order.
+ * 
+ * Uses hybrid approach for best performance:
+ * 1. Fast path: Check index (O(1) Set lookup, ~0ms) - requires index v1.5+
+ * 2. Fallback: Check R2 storage directly (~5-15ms)
+ * 3. Fallback: Check DO Spaces via HEAD request (~50-200ms)
  * 
  * For validated AROI domains, redirect to /{domain}/
  * For unvalidated/misconfigured domains, redirect to /contact/{hash}/
  * 
+ * @param {object} idx - Search index (may have validatedAroiSet)
  * @param {object} env - Environment bindings  
  * @param {string} domain - AROI domain to check
  * @returns {Promise<boolean>} true if validated, false if not
  */
-async function isAroiDomainValidated(env, domain) {
+async function isAroiDomainValidated(idx, env, domain) {
+  // Fast path: Check index first (O(1), no I/O)
+  const indexResult = isAroiValidatedInIndex(idx, domain);
+  if (indexResult !== null) {
+    return indexResult;
+  }
+  
+  // Fallback: Check storage backends (index doesn't have validated_aroi_domains)
   // Parse storage order from env
   const orderStr = env?.STORAGE_ORDER || 'r2,do,failover';
   const order = orderStr.split(',').map(s => s.trim().toLowerCase());
@@ -751,7 +784,7 @@ export async function onRequest(ctx) {
       // For AROI domains, verify the domain page exists before redirecting
       // If domain is not validated (misconfigured), use contact hash fallback
       if (result.type === 'aroi' && result.fallback) {
-        const isValidated = await isAroiDomainValidated(ctx.env, result.id);
+        const isValidated = await isAroiDomainValidated(idx, ctx.env, result.id);
         if (!isValidated) {
           // Domain not validated, redirect to contact hash instead
           if (isSafePath(result.fallback)) {
