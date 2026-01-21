@@ -631,6 +631,92 @@ function renderError(err, query) {
 }
 
 // =============================================================================
+// AROI DOMAIN VALIDATION HELPERS
+// =============================================================================
+
+/**
+ * Check if an AROI domain page exists in R2 storage.
+ * Returns true if the page exists, false otherwise.
+ * 
+ * @param {object} env - Environment bindings
+ * @param {string} domain - AROI domain (e.g., "1aeo.com")
+ * @returns {Promise<boolean>}
+ */
+async function aroiPageExistsInR2(env, domain) {
+  if (!env?.METRICS_CONTENT) return null; // R2 not configured
+  
+  try {
+    // Check for /{domain}/index.html
+    const object = await env.METRICS_CONTENT.get(`${domain}/index.html`);
+    return object !== null;
+  } catch (e) {
+    console.error(`R2 AROI check error for ${domain}:`, e.message);
+    return null; // Unknown, treat as not verified
+  }
+}
+
+/**
+ * Check if an AROI domain page exists in DO Spaces.
+ * Returns true if the page exists, false otherwise.
+ * 
+ * @param {object} env - Environment bindings
+ * @param {string} domain - AROI domain (e.g., "1aeo.com")
+ * @returns {Promise<boolean>}
+ */
+async function aroiPageExistsInSpaces(env, domain) {
+  const baseUrl = env?.DO_SPACES_URL;
+  if (!baseUrl) return null; // DO Spaces not configured
+  
+  try {
+    const url = `${baseUrl.replace(/\/$/, '')}/${domain}/index.html`;
+    const response = await fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'Cloudflare-Pages/1.0' },
+    });
+    return response.ok;
+  } catch (e) {
+    console.error(`DO Spaces AROI check error for ${domain}:`, e.message);
+    return null; // Unknown, treat as not verified
+  }
+}
+
+/**
+ * Check if an AROI domain is validated (has a page generated).
+ * Checks storage backends in configured order.
+ * 
+ * For validated AROI domains, redirect to /{domain}/
+ * For unvalidated/misconfigured domains, redirect to /contact/{hash}/
+ * 
+ * @param {object} env - Environment bindings  
+ * @param {string} domain - AROI domain to check
+ * @returns {Promise<boolean>} true if validated, false if not
+ */
+async function isAroiDomainValidated(env, domain) {
+  // Parse storage order from env
+  const orderStr = env?.STORAGE_ORDER || 'r2,do,failover';
+  const order = orderStr.split(',').map(s => s.trim().toLowerCase());
+  
+  for (const backend of order) {
+    let result = null;
+    
+    if (backend === 'r2') {
+      result = await aroiPageExistsInR2(env, domain);
+    } else if (backend === 'do') {
+      result = await aroiPageExistsInSpaces(env, domain);
+    }
+    // Skip 'failover' - we don't check failover for AROI validation
+    
+    // If we got a definitive answer (true or false), return it
+    if (result === true) return true;
+    if (result === false) return false;
+    // result === null means backend not configured or error, try next
+  }
+  
+  // No backend could verify, assume not validated (use hash fallback)
+  return false;
+}
+
+// =============================================================================
 // REQUEST HANDLER
 // =============================================================================
 
@@ -661,6 +747,19 @@ export async function onRequest(ctx) {
         }
         return handleError(new Error('Invalid ID'), q);
       }
+      
+      // For AROI domains, verify the domain page exists before redirecting
+      // If domain is not validated (misconfigured), use contact hash fallback
+      if (result.type === 'aroi' && result.fallback) {
+        const isValidated = await isAroiDomainValidated(ctx.env, result.id);
+        if (!isValidated) {
+          // Domain not validated, redirect to contact hash instead
+          if (isSafePath(result.fallback)) {
+            return safeRedirect(url.origin, `/contact/${result.fallback}/`);
+          }
+        }
+      }
+      
       // Empty pathType means ID is the full path (e.g., aroi: /1aeo.com/)
       const path = pathType ? `/${pathType}/${result.id}/` : `/${result.id}/`;
       return safeRedirect(url.origin, path);
