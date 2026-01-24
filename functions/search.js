@@ -638,115 +638,52 @@ function renderError(err, query) {
 }
 
 // =============================================================================
-// AROI DOMAIN VALIDATION HELPERS
+// AROI DOMAIN VALIDATION
 // =============================================================================
 
-/**
- * Check if an AROI domain is validated using the search index.
- * This is the fast path - O(1) Set lookup, no I/O.
- * 
- * @param {object} idx - Search index with validatedAroiSet
- * @param {string} domain - AROI domain (e.g., "1aeo.com")
- * @returns {boolean|null} true if validated, false if not, null if index doesn't have the data
- */
-function isAroiValidatedInIndex(idx, domain) {
-  // Check if index has validated_aroi_domains (v1.5+)
-  if (!idx.validatedAroiSet) return null; // Index doesn't have this data
-  return idx.validatedAroiSet.has(domain.toLowerCase());
-}
-
-/**
- * Check if an AROI domain page exists in R2 storage.
- * Fallback for when index doesn't have validated_aroi_domains.
- * 
- * @param {object} env - Environment bindings
- * @param {string} domain - AROI domain (e.g., "1aeo.com")
- * @returns {Promise<boolean|null>} true if exists, false if not, null if R2 not configured
- */
-async function aroiPageExistsInR2(env, domain) {
-  if (!env?.METRICS_CONTENT) return null; // R2 not configured
-  
-  try {
-    // Check for /{domain}/index.html
-    const object = await env.METRICS_CONTENT.get(`${domain}/index.html`);
-    return object !== null;
-  } catch (e) {
-    console.error(`R2 AROI check error for ${domain}:`, e.message);
-    return null; // Unknown, treat as not verified
+// Storage check functions: return true/false if definitive, null if unavailable
+const STORAGE_CHECKERS = {
+  async r2(env, path) {
+    if (!env?.METRICS_CONTENT) return null;
+    try {
+      return (await env.METRICS_CONTENT.get(path)) !== null;
+    } catch { return null; }
+  },
+  async do(env, path) {
+    if (!env?.DO_SPACES_URL) return null;
+    try {
+      const res = await fetch(`${env.DO_SPACES_URL.replace(/\/$/, '')}/${path}`, {
+        method: 'HEAD', headers: { 'User-Agent': 'Cloudflare-Pages/1.0' }
+      });
+      return res.ok;
+    } catch { return null; }
   }
-}
+};
 
 /**
- * Check if an AROI domain page exists in DO Spaces.
- * Fallback for when index doesn't have validated_aroi_domains and R2 not configured.
- * 
- * @param {object} env - Environment bindings
- * @param {string} domain - AROI domain (e.g., "1aeo.com")
- * @returns {Promise<boolean|null>} true if exists, false if not, null if DO not configured
- */
-async function aroiPageExistsInSpaces(env, domain) {
-  const baseUrl = env?.DO_SPACES_URL;
-  if (!baseUrl) return null; // DO Spaces not configured
-  
-  try {
-    const url = `${baseUrl.replace(/\/$/, '')}/${domain}/index.html`;
-    const response = await fetch(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': 'Cloudflare-Pages/1.0' },
-    });
-    return response.ok;
-  } catch (e) {
-    console.error(`DO Spaces AROI check error for ${domain}:`, e.message);
-    return null; // Unknown, treat as not verified
-  }
-}
-
-/**
- * Check if an AROI domain is validated (has a page generated).
- * 
- * Uses hybrid approach for best performance:
- * 1. Fast path: Check index (O(1) Set lookup, ~0ms) - requires index v1.5+
- * 2. Fallback: Check R2 storage directly (~5-15ms)
- * 3. Fallback: Check DO Spaces via HEAD request (~50-200ms)
- * 
- * For validated AROI domains, redirect to /{domain}/
- * For unvalidated/misconfigured domains, redirect to /contact/{hash}/
- * 
- * @param {object} idx - Search index (may have validatedAroiSet)
- * @param {object} env - Environment bindings  
- * @param {string} domain - AROI domain to check
- * @returns {Promise<boolean>} true if validated, false if not
+ * Check if AROI domain is validated (has generated page).
+ * Fast path: O(1) index lookup. Fallback: storage check.
  */
 async function isAroiDomainValidated(idx, env, domain) {
-  // Fast path: Check index first (O(1), no I/O)
-  const indexResult = isAroiValidatedInIndex(idx, domain);
-  if (indexResult !== null) {
-    return indexResult;
+  const domainLow = domain.toLowerCase();
+  
+  // Fast path: index lookup (v1.5+)
+  if (idx.validatedAroiSet) {
+    return idx.validatedAroiSet.has(domainLow);
   }
   
-  // Fallback: Check storage backends (index doesn't have validated_aroi_domains)
-  // Parse storage order from env
-  const orderStr = env?.STORAGE_ORDER || 'r2,do,failover';
-  const order = orderStr.split(',').map(s => s.trim().toLowerCase());
+  // Fallback: check storage backends in order
+  const path = `${domain}/index.html`;
+  const order = (env?.STORAGE_ORDER || 'r2,do').split(',');
   
   for (const backend of order) {
-    let result = null;
-    
-    if (backend === 'r2') {
-      result = await aroiPageExistsInR2(env, domain);
-    } else if (backend === 'do') {
-      result = await aroiPageExistsInSpaces(env, domain);
-    }
-    // Skip 'failover' - we don't check failover for AROI validation
-    
-    // If we got a definitive answer (true or false), return it
-    if (result === true) return true;
-    if (result === false) return false;
-    // result === null means backend not configured or error, try next
+    const checker = STORAGE_CHECKERS[backend.trim()];
+    if (!checker) continue;
+    const result = await checker(env, path);
+    if (result !== null) return result;
   }
   
-  // No backend could verify, assume not validated (use hash fallback)
-  return false;
+  return false; // No backend verified, use hash fallback
 }
 
 // =============================================================================
