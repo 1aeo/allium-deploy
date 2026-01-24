@@ -319,12 +319,19 @@ function buildLookupMaps(raw) {
   // Platforms/flags from lookups or defaults
   const platformSet = new Set((lookups.platforms || DEFAULT_PLATFORMS).map(p => p.toLowerCase()));
   const flagSet = new Set((lookups.flags || DEFAULT_FLAGS).map(f => f.toLowerCase()));
+  
+  // Validated AROI domains from lookups (v1.5+ index)
+  // Used for O(1) validation check before redirecting to /{domain}/
+  const validatedAroiSet = lookups.validated_aroi_domains 
+    ? new Set(lookups.validated_aroi_domains.map(d => d.toLowerCase()))
+    : null;  // null indicates index doesn't have this data (fallback to storage check)
 
   return Object.freeze({
     relays, families, nickLower, fpMap, nickMultiMap, ipMap,
     asSet, asNameMap, ccSet, ccNameMap,
     contactDomainMap, contactDomainPrefixMap, contactHashMap,
     familyIdMap, familyPrefixMap, familyNickMap, platformSet, flagSet,
+    validatedAroiSet,
   });
 }
 
@@ -631,6 +638,55 @@ function renderError(err, query) {
 }
 
 // =============================================================================
+// AROI DOMAIN VALIDATION
+// =============================================================================
+
+// Storage check functions: return true/false if definitive, null if unavailable
+const STORAGE_CHECKERS = {
+  async r2(env, path) {
+    if (!env?.METRICS_CONTENT) return null;
+    try {
+      return (await env.METRICS_CONTENT.get(path)) !== null;
+    } catch { return null; }
+  },
+  async do(env, path) {
+    if (!env?.DO_SPACES_URL) return null;
+    try {
+      const res = await fetch(`${env.DO_SPACES_URL.replace(/\/$/, '')}/${path}`, {
+        method: 'HEAD', headers: { 'User-Agent': 'Cloudflare-Pages/1.0' }
+      });
+      return res.ok;
+    } catch { return null; }
+  }
+};
+
+/**
+ * Check if AROI domain is validated (has generated page).
+ * Fast path: O(1) index lookup. Fallback: storage check.
+ */
+async function isAroiDomainValidated(idx, env, domain) {
+  const domainLow = domain.toLowerCase();
+  
+  // Fast path: index lookup (v1.5+)
+  if (idx.validatedAroiSet) {
+    return idx.validatedAroiSet.has(domainLow);
+  }
+  
+  // Fallback: check storage backends in order
+  const path = `${domain}/index.html`;
+  const order = (env?.STORAGE_ORDER || 'r2,do').split(',');
+  
+  for (const backend of order) {
+    const checker = STORAGE_CHECKERS[backend.trim()];
+    if (!checker) continue;
+    const result = await checker(env, path);
+    if (result !== null) return result;
+  }
+  
+  return false; // No backend verified, use hash fallback
+}
+
+// =============================================================================
 // REQUEST HANDLER
 // =============================================================================
 
@@ -661,6 +717,19 @@ export async function onRequest(ctx) {
         }
         return handleError(new Error('Invalid ID'), q);
       }
+      
+      // For AROI domains, verify the domain page exists before redirecting
+      // If domain is not validated (misconfigured), use contact hash fallback
+      if (result.type === 'aroi' && result.fallback) {
+        const isValidated = await isAroiDomainValidated(idx, ctx.env, result.id);
+        if (!isValidated) {
+          // Domain not validated, redirect to contact hash instead
+          if (isSafePath(result.fallback)) {
+            return safeRedirect(url.origin, `/contact/${result.fallback}/`);
+          }
+        }
+      }
+      
       // Empty pathType means ID is the full path (e.g., aroi: /1aeo.com/)
       const path = pathType ? `/${pathType}/${result.id}/` : `/${result.id}/`;
       return safeRedirect(url.origin, path);
