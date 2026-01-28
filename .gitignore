@@ -5,6 +5,7 @@ config.env
 
 # Generated from template by deploy script
 wrangler.toml
+allium.cron
 
 # Keep public/ dir but ignore contents (except .gitkeep)
 public/*

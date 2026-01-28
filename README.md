@@ -31,6 +31,9 @@ nano config.env  # Edit values (see below)
 # 3. Install
 ./scripts/allium-deploy-install.sh
 
+# 4. Install cron (uses /etc/cron.d/ drop-in for isolation)
+sudo cp ~/allium-deploy/allium.cron /etc/cron.d/allium && sudo chmod 644 /etc/cron.d/allium
+
 # Done! Metrics update every 30 minutes
 ```
 
@@ -267,8 +270,8 @@ tail -f ~/allium-deploy/logs/update.log
 # Deploy Pages function
 ~/allium-deploy/scripts/allium-deploy-cfpages.sh
 
-# Check cron
-crontab -l
+# Check cron status
+~/allium-deploy/scripts/allium-cron-check.sh
 ```
 
 ---
@@ -287,7 +290,8 @@ allium-deploy/          # This deployment repo
 │   └── search.js       # Search function (query → redirect)
 ├── scripts/
 │   ├── allium-deploy-install.sh      # One-time setup
-│   ├── allium-deploy-update.sh       # Main cron script
+│   ├── allium-deploy-update.sh       # Runs every 30 min via cron
+│   ├── allium-cron-check.sh          # Verify cron is installed
 │   ├── allium-deploy-upload-r2.sh    # R2 upload with backups
 │   ├── allium-deploy-upload-do.sh    # DO Spaces upload with backups
 │   ├── allium-deploy-upload-common.sh # Shared upload functions

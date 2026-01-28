@@ -117,19 +117,25 @@ echo "✅ Output directory: $OUTPUT_DIR"
 mkdir -p "$DEPLOY_DIR/logs"
 chmod +x "$SCRIPT_DIR"/allium-deploy-*.sh
 
-# --- CRON SETUP ---
+# --- CRON SETUP (drop-in file) ---
 echo ""
 echo "⏰ Setting up cron job..."
 CRON_SCHEDULE="${CRON_SCHEDULE:-*/30 * * * *}"
-CRON_LINE="$CRON_SCHEDULE $SCRIPT_DIR/allium-deploy-update.sh >> $DEPLOY_DIR/logs/update.log 2>&1"
 
-if crontab -l 2>/dev/null | grep -q "allium-deploy-update"; then
-    echo "   Updating existing cron job..."
-    (crontab -l 2>/dev/null | grep -v "allium-deploy-update"; echo "$CRON_LINE") | crontab -
+# Generate drop-in file
+cat > "$DEPLOY_DIR/allium.cron" << EOF
+SHELL=/bin/bash
+$CRON_SCHEDULE $USER $SCRIPT_DIR/allium-deploy-update.sh >> $DEPLOY_DIR/logs/update.log 2>&1
+EOF
+
+if [[ -f /etc/cron.d/allium ]] && grep -q "allium-deploy-update" /etc/cron.d/allium; then
+    echo "✅ Cron installed: /etc/cron.d/allium"
 else
-    (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
+    echo "⚠️  Install cron: sudo cp $DEPLOY_DIR/allium.cron /etc/cron.d/allium && sudo chmod 644 /etc/cron.d/allium"
 fi
-echo "✅ Cron job configured: $CRON_SCHEDULE"
+
+# Clean up old user crontab entries
+crontab -l 2>/dev/null | grep -v "allium-deploy-update" | crontab - 2>/dev/null || true
 
 # --- DONE ---
 echo ""
@@ -144,5 +150,5 @@ echo "Commands:"
 echo "  Manual update:    $SCRIPT_DIR/allium-deploy-update.sh"
 echo "  Manual upload:    $SCRIPT_DIR/allium-deploy-upload.sh"
 echo "  List backups:     $SCRIPT_DIR/allium-deploy-upload.sh --list-backups"
-echo "  View cron:        crontab -l"
+echo "  View cron:        cat /etc/cron.d/allium"
 
