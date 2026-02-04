@@ -205,6 +205,76 @@ let cachedIndex = null;
 let cacheExpiry = 0;
 
 /**
+ * Fetch search-index.json directly from storage backends.
+ * Avoids self-referential requests that cause 502 errors.
+ * 
+ * Order: R2 (native binding, fastest) → DO Spaces (HTTP) → Origin (fallback)
+ * 
+ * @param {object} env - Cloudflare environment bindings
+ * @param {string} origin - Request origin (fallback only)
+ * @returns {Promise<Response>} Response containing the index JSON
+ * @throws {Error} If all backends fail
+ */
+async function fetchIndexFromStorage(env, origin) {
+  const indexPath = 'search-index.json';
+  const errors = [];
+  
+  // 1. Try R2 direct binding (fastest, no network hop)
+  if (env?.METRICS_CONTENT) {
+    try {
+      const object = await env.METRICS_CONTENT.get(indexPath);
+      if (object) {
+        return new Response(object.body, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      errors.push('R2: not found');
+    } catch (e) {
+      errors.push(`R2: ${e.message}`);
+    }
+  }
+  
+  // 2. Try DO Spaces direct HTTP fetch
+  if (env?.DO_SPACES_URL) {
+    try {
+      const url = `${env.DO_SPACES_URL.replace(/\/$/, '')}/${indexPath}`;
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Cloudflare-Pages-Search/1.0' },
+      });
+      if (res.ok) {
+        return res;
+      }
+      errors.push(`DO Spaces: HTTP ${res.status}`);
+    } catch (e) {
+      errors.push(`DO Spaces: ${e.message}`);
+    }
+  }
+  
+  // 3. Fallback: origin fetch (only if no storage backends configured)
+  // This is the old behavior - kept for backwards compatibility but NOT recommended
+  // as it causes self-referential requests that can trigger 502 errors
+  if (!env?.METRICS_CONTENT && !env?.DO_SPACES_URL) {
+    console.warn('No storage backends configured, falling back to origin fetch (may cause 502 errors)');
+    try {
+      const res = await fetch(`${origin}/${indexPath}`, {
+        cf: { cacheTtl: 300, cacheEverything: true },
+      });
+      if (res.ok) {
+        return res;
+      }
+      errors.push(`Origin: HTTP ${res.status}`);
+    } catch (e) {
+      errors.push(`Origin: ${e.message}`);
+    }
+  }
+  
+  // All backends failed
+  throw searchError(ERR.INDEX_HTTP, 'Failed to fetch search index from all backends',
+    errors.join('; '));
+}
+
+/**
  * Build optimized lookup structures from raw index.
  * Single pass over each array for efficiency.
  * 
@@ -335,16 +405,17 @@ function buildLookupMaps(raw) {
   });
 }
 
-async function loadIndex(origin) {
+async function loadIndex(env, origin) {
   const now = Date.now();
   if (cachedIndex && now < cacheExpiry) return cachedIndex;
   
+  // Fetch directly from storage backends (avoids 502 errors from self-referential requests)
   let res;
   try {
-    res = await fetch(`${origin}/search-index.json`, {
-      cf: { cacheTtl: 300, cacheEverything: true },
-    });
+    res = await fetchIndexFromStorage(env, origin);
   } catch (e) {
+    // Re-throw if already a searchError
+    if (e.code) throw e;
     throw searchError(ERR.INDEX_HTTP, 'Network error fetching index', e.message);
   }
   
@@ -704,7 +775,7 @@ export async function onRequest(ctx) {
   }
   
   try {
-    const idx = await loadIndex(url.origin);
+    const idx = await loadIndex(ctx.env, url.origin);
     const result = search(q, idx);
     
     // Direct redirect for single-match types
