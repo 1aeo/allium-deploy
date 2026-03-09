@@ -61,6 +61,18 @@ purge_cdn() {
         -H "Content-Type: application/json" \
         -d '{"urls": ["search-index.json"]}' >/dev/null 2>&1 || true
     
+    # Purge Prometheus metrics (must be fresh for scraping)
+    log "   Purging Prometheus metrics..."
+    local purge_response purge_http_code
+    purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
+        -H "X-Purge-Secret: ${purge_secret}" \
+        -H "Content-Type: application/json" \
+        -d '{"urls": ["/metrics"]}' 2>&1)
+    purge_http_code=$(echo "$purge_response" | tail -1)
+    if [[ "$purge_http_code" != "200" ]]; then
+        log "   ⚠️  Prometheus metrics purge returned HTTP $purge_http_code"
+    fi
+    
     # Find all HTML files and convert to URL paths
     # Cache keys use directory form (foo/) not file form (foo/index.html)
     local html_files=()

@@ -79,6 +79,10 @@ export function getExtension(path) {
  * @returns {string} MIME type
  */
 export function getMimeType(path) {
+  // Prometheus metrics endpoint (no file extension)
+  if (path === 'metrics' || path.endsWith('/metrics')) {
+    return 'text/plain; version=0.0.4; charset=utf-8';
+  }
   return MIME_TYPES[getExtension(path)] || 'application/octet-stream';
 }
 
