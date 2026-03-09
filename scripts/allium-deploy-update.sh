@@ -60,7 +60,7 @@ purge_cdn() {
     si_purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
         -H "X-Purge-Secret: ${purge_secret}" \
         -H "Content-Type: application/json" \
-        -d '{"urls": ["search-index.json"]}' 2>&1)
+        -d '{"urls": ["search-index.json"]}' 2>&1 || true)
     si_purge_http_code=$(echo "$si_purge_response" | tail -1)
     if [[ "$si_purge_http_code" != "200" ]]; then
         log "   ⚠️  search-index.json purge returned HTTP $si_purge_http_code"
@@ -68,14 +68,14 @@ purge_cdn() {
     
     # Purge Prometheus metrics (must be fresh for scraping)
     log "   Purging Prometheus metrics..."
-    local purge_response purge_http_code
-    purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
+    local pm_purge_response pm_purge_http_code
+    pm_purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
         -H "X-Purge-Secret: ${purge_secret}" \
         -H "Content-Type: application/json" \
-        -d '{"urls": ["/metrics"]}' 2>&1)
-    purge_http_code=$(echo "$purge_response" | tail -1)
-    if [[ "$purge_http_code" != "200" ]]; then
-        log "   ⚠️  Prometheus metrics purge returned HTTP $purge_http_code"
+        -d '{"urls": ["/metrics"]}' 2>&1 || true)
+    pm_purge_http_code=$(echo "$pm_purge_response" | tail -1)
+    if [[ "$pm_purge_http_code" != "200" ]]; then
+        log "   ⚠️  Prometheus metrics purge returned HTTP $pm_purge_http_code"
     fi
     
     # Find all HTML files and convert to URL paths
