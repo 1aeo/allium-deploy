@@ -56,10 +56,15 @@ purge_cdn() {
     
     # Purge search-index.json first (must be fresh before any page loads)
     log "   Purging search-index.json..."
-    curl -s -X POST "${site_url}/_purge" \
+    local si_purge_response si_purge_http_code
+    si_purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
         -H "X-Purge-Secret: ${purge_secret}" \
         -H "Content-Type: application/json" \
-        -d '{"urls": ["search-index.json"]}' >/dev/null 2>&1 || true
+        -d '{"urls": ["search-index.json"]}' 2>&1)
+    si_purge_http_code=$(echo "$si_purge_response" | tail -1)
+    if [[ "$si_purge_http_code" != "200" ]]; then
+        log "   ⚠️  search-index.json purge returned HTTP $si_purge_http_code"
+    fi
     
     # Purge Prometheus metrics (must be fresh for scraping)
     log "   Purging Prometheus metrics..."
