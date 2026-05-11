@@ -189,6 +189,10 @@ Server-side search for Tor relay metrics without client-side JavaScript.
 | Platform | `linux`, `freebsd` | Direct to platform page |
 | Flag | `exit`, `guard` | Direct to flag page |
 
+### CIISS Version Indicators (v1.6+ index)
+
+Search disambiguation pages display **CIISS v2 / v3** indicators next to relay names when the operator's ContactInfo declares a `ciissversion`. v3 indicators are green; v2 indicators are grey; relays without an AROI declaration show no indicator. This requires `search-index.json` schema **v1.6+** (Allium build with [PR #207](https://github.com/1aeo/allium/pull/207) or later, which adds the per-relay `vn` field). Older indexes (≤ v1.5) continue to work unchanged with no indicators shown.
+
 ### Security Features
 
 - **Input Validation:** Query length limit (100 chars), character allowlist
