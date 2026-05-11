@@ -165,6 +165,8 @@ ul { padding-left: 1.5rem; } li { margin-bottom: 0.5rem; }
 .aroi { font-size: 0.85em; color: #198754; font-weight: 500; text-decoration: none; } .aroi:hover { text-decoration: underline; }
 .hint { color: #6c757d; font-style: italic; margin-bottom: 15px; } .text-danger { color: #dc3545; }
 .back { margin: 0 0 16px 0; } .back a { color: #6c757d; text-decoration: none; } .back a:hover { color: #0066cc; }
+.ciiss-ver { font-size: 0.7em; padding: 1px 5px; margin-left: 6px; border-radius: 3px; font-weight: 600; color: #fff; vertical-align: middle; letter-spacing: 0.02em; }
+.ciiss-ver-2 { background: #6c757d; } .ciiss-ver-3 { background: #198754; }
 </style>
 </head>
 <body>
@@ -207,20 +209,48 @@ let cacheExpiry = 0;
 /**
  * Build optimized lookup structures from raw index.
  * Single pass over each array for efficiency.
- * 
- * Schema: Allium v1.3 search-index.json
- *   - relays: [{f, n, a, c, as, cc, ip, fam}]
- *   - families: [{id, sz, nn, px, pxg, a, c, as, cc, fs}]
- *   - lookups: {as_names, country_names, platforms, flags}
- * 
+ *
+ * Schema: Allium v1.6 search-index.json
+ *   - relays: [{f, n, a, c, as, cc, ip, fam, vn?}]
+ *   - families: [{id, sz, nn, px, pxg, a, c, as, cc, fs, v?, v3p?}]
+ *   - lookups: {as_names, country_names, platforms, flags,
+ *               validated_aroi_domains?, v3_thresholds?}
+ *
+ * Version history:
+ *   1.1 nn → dict
+ *   1.2 pxg sparse
+ *   1.3 nn keys lowercase
+ *   1.4 v (validated) field on family entries
+ *   1.5 validated_aroi_domains lookup
+ *   1.6 vn per-relay (CIISS v2/v3), v3p per-family,
+ *       v3_thresholds lookup (allium PR #207)
+ *
+ * Forward-compat policy: unknown top-level fields are ignored; missing
+ * sparse fields are treated as absent (not falsy). Within the 1.x major,
+ * minor bumps are accepted silently. A 2.x major bump is rejected by
+ * the major-version guard below so a breaking schema change cannot be
+ * silently mis-rendered.
+ *
  * @param {object} raw - Raw index data from search-index.json
  * @returns {object} Frozen lookup structure
- * @throws {Error} If index format is invalid
+ * @throws {Error} If index format is invalid or major version unsupported
  */
 function buildLookupMaps(raw) {
   // Schema validation
   if (!raw || typeof raw !== 'object') {
     throw new Error('Invalid index format: expected object');
+  }
+
+  // Major-version guard (v1.6+ policy). Within 1.x we tolerate unknown
+  // fields; a 2.x bump implies a breaking change so refuse to operate
+  // on potentially mis-interpreted data. Missing meta.version is
+  // tolerated (legacy indexes).
+  const metaVer = String((raw.meta && raw.meta.version) || '');
+  if (metaVer) {
+    const major = metaVer.split('.')[0];
+    if (major !== '1') {
+      throw new Error(`Unsupported search-index major version: ${metaVer}`);
+    }
   }
   
   const relays = Array.isArray(raw.relays) ? raw.relays : [];
@@ -432,9 +462,23 @@ function handleError(err, query) {
 
 /**
  * Map relay to result format for disambiguation.
+ *
+ * v1.6: propagates `vn` (CIISS ContactInfo declared ciissversion).
+ * Strict-equality guard restricts the propagated value to the two
+ * strings the upstream schema declares ('2' or '3') so unexpected
+ * future values (e.g. '10', numbers, objects) collapse to null and
+ * render as no pill rather than crashing the template.
  */
 function relayResult(r) {
-  return { t: 'relay', f: r.f, n: r.n, cc: r.cc, a: r.a || null, c: r.c || null };
+  return {
+    t: 'relay',
+    f: r.f,
+    n: r.n,
+    cc: r.cc,
+    a: r.a || null,
+    c: r.c || null,
+    vn: (r.vn === '2' || r.vn === '3') ? r.vn : null,
+  };
 }
 
 /**
@@ -605,7 +649,12 @@ function renderDisambiguation(matches, query, hint) {
       // Show AROI as link: /{domain}/ primary, /contact/{hash}/ fallback
       const aroiHref = m.a ? `/${escapeHtml(m.a)}/` : (m.c ? `/contact/${escapeHtml(m.c)}/` : null);
       const aroi = aroiHref ? ` · <a href="${aroiHref}" class="aroi">${escapeHtml(m.a || m.c)}</a>` : '';
-      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong></a>${aroi}<a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
+      // v1.6: CIISS version pill ('2' | '3'). m.vn is restricted by
+      // relayResult; any other value renders nothing.
+      const verBadge = m.vn === '3' ? '<span class="ciiss-ver ciiss-ver-3">v3</span>'
+                     : m.vn === '2' ? '<span class="ciiss-ver ciiss-ver-2">v2</span>'
+                     : '';
+      content += `<div class="result-item"><a href="/relay/${fp}/"><strong>${name}</strong>${verBadge}</a>${aroi}<a href="/relay/${fp}/" class="fp">${cc}${fp}</a></div>\n`;
     }
   }
   
