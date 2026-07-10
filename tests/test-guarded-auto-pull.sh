@@ -27,7 +27,7 @@ make_gh_stub() {
 for arg in "$@"; do
     case "$arg" in
         auth)
-            exit 0
+            exit "${GH_AUTH_EXIT:-0}"
             ;;
         api)
             printf '%s\n' "${GH_CHECKS_PAYLOAD:?GH_CHECKS_PAYLOAD must be set}"
@@ -95,6 +95,15 @@ push_remote_commit() {
     git -C "$seed" push origin "$branch" >/dev/null 2>&1
 }
 
+install_cfpages_test_script() {
+    local clone="$1"
+
+    mkdir -p "$clone/scripts"
+    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$clone/scripts/allium-deploy-cfpages.sh"
+    cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$clone/scripts/allium-deploy-lib.sh"
+    chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
+}
+
 test_green_pull() {
     local parts seed clone old new
     parts=$(init_repo_pair master green)
@@ -115,6 +124,41 @@ test_green_pull() {
     [[ "$(git -C "$clone" rev-parse HEAD)" == "$new" ]] || fail "green pull did not fast-forward"
     [[ "${ALLIUM_ROLLBACK_SHA:-}" == "$old" ]] || fail "green pull did not record rollback sha"
     pass "green check-runs allow fast-forward"
+}
+
+test_auth_failure_skips_check_runs() {
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    export GH_AUTH_EXIT=1
+    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+    source_update_script
+
+    if check_runs_are_green "1aeo/allium" "deadbeef" "allium"; then
+        fail "unauthenticated gh was accepted"
+    fi
+    unset GH_AUTH_EXIT
+    pass "unauthenticated gh skips check-run gate"
+}
+
+test_no_check_runs_skip_pull() {
+    local parts seed clone old
+    parts=$(init_repo_pair master no-checks)
+    IFS='|' read -r _ seed clone <<< "$parts"
+    old=$(git -C "$clone" rev-parse HEAD)
+    push_remote_commit "$seed" master "unchecked"
+
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    export GH_CHECKS_PAYLOAD='{"total_count":0,"check_runs":[]}'
+    source_update_script
+    ALLIUM_REPO_DIR="$clone"
+    unset ALLIUM_ROLLBACK_SHA
+
+    guarded_pull_allium
+
+    [[ "$(git -C "$clone" rev-parse HEAD)" == "$old" ]] || fail "no-check-runs pull changed checkout"
+    [[ -z "${ALLIUM_ROLLBACK_SHA:-}" ]] || fail "no-check-runs pull recorded rollback sha"
+    pass "missing check-runs skip pull"
 }
 
 test_paginated_check_runs() {
@@ -174,6 +218,49 @@ test_ff_fail_skip() {
     pass "non-fast-forward remote skips pull"
 }
 
+test_dirty_worktree_skips_pull() {
+    local parts seed clone old
+    parts=$(init_repo_pair master dirty)
+    IFS='|' read -r _ seed clone <<< "$parts"
+    old=$(git -C "$clone" rev-parse HEAD)
+    push_remote_commit "$seed" master "remote"
+    printf 'dirty\n' >> "$clone/file.txt"
+
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+    source_update_script
+    ALLIUM_REPO_DIR="$clone"
+    unset ALLIUM_ROLLBACK_SHA
+
+    guarded_pull_allium
+
+    [[ "$(git -C "$clone" rev-parse HEAD)" == "$old" ]] || fail "dirty checkout changed HEAD"
+    [[ -z "${ALLIUM_ROLLBACK_SHA:-}" ]] || fail "dirty checkout recorded rollback sha"
+    pass "dirty checkout skips guarded pull"
+}
+
+test_fetch_failure_skips_pull() {
+    local parts clone old
+    parts=$(init_repo_pair master fetch-fail)
+    IFS='|' read -r _ _ clone <<< "$parts"
+    old=$(git -C "$clone" rev-parse HEAD)
+    git -C "$clone" remote set-url origin "$TMP_DIR/missing-origin.git"
+
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+    source_update_script
+    ALLIUM_REPO_DIR="$clone"
+    unset ALLIUM_ROLLBACK_SHA
+
+    guarded_pull_allium
+
+    [[ "$(git -C "$clone" rev-parse HEAD)" == "$old" ]] || fail "fetch-failure checkout changed HEAD"
+    [[ -z "${ALLIUM_ROLLBACK_SHA:-}" ]] || fail "fetch-failure recorded rollback sha"
+    pass "fetch failure skips guarded pull"
+}
+
 test_rollback_both() {
     local allium_parts deploy_parts allium_seed allium_clone deploy_seed deploy_clone allium_old deploy_old
     allium_parts=$(init_repo_pair master rollback-allium)
@@ -189,7 +276,9 @@ test_rollback_both() {
     make_gh_stub "$TMP_DIR/bin"
     export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
     source_update_script
+    # shellcheck disable=SC2034
     ALLIUM_REPO_DIR="$allium_clone"
+    # shellcheck disable=SC2034
     DEPLOY_DIR="$deploy_clone"
     unset ALLIUM_ROLLBACK_SHA ALLIUM_DEPLOY_ROLLBACK_SHA
 
@@ -208,9 +297,7 @@ test_stale_cfpages_refuses_deploy() {
     local parts seed clone output
     parts=$(init_repo_pair main stale-cfpages)
     IFS='|' read -r _ seed clone <<< "$parts"
-    mkdir -p "$clone/scripts"
-    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$clone/scripts/allium-deploy-cfpages.sh"
-    chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
+    install_cfpages_test_script "$clone"
     push_remote_commit "$seed" main "new-function"
 
     if output=$(ALLIUM_CFPAGES_TEST_MODE=1 "$clone/scripts/allium-deploy-cfpages.sh" 2>&1); then
@@ -224,9 +311,7 @@ test_fresh_cfpages_allows_deploy() {
     local parts clone output
     parts=$(init_repo_pair main fresh-cfpages)
     IFS='|' read -r _ _ clone <<< "$parts"
-    mkdir -p "$clone/scripts"
-    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$clone/scripts/allium-deploy-cfpages.sh"
-    chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
+    install_cfpages_test_script "$clone"
 
     if ! output=$(ALLIUM_CFPAGES_TEST_MODE=1 "$clone/scripts/allium-deploy-cfpages.sh" 2>&1); then
         fail "fresh cfpages checkout was refused: $output"
@@ -236,9 +321,13 @@ test_fresh_cfpages_allows_deploy() {
 
 test_allium_path_derivation
 test_green_pull
+test_auth_failure_skips_check_runs
+test_no_check_runs_skip_pull
 test_paginated_check_runs
 test_not_green_skip
 test_ff_fail_skip
+test_dirty_worktree_skips_pull
+test_fetch_failure_skips_pull
 test_rollback_both
 test_stale_cfpages_refuses_deploy
 test_fresh_cfpages_allows_deploy

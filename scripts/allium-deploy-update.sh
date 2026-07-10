@@ -8,6 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=./scripts/allium-deploy-lib.sh
+source "$SCRIPT_DIR/allium-deploy-lib.sh"
+
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
 elif [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" != "1" ]]; then
@@ -42,30 +45,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-run_with_timeout() {
-    local seconds="$1"
-    shift
-
-    if command -v timeout &>/dev/null; then
-        timeout "$seconds" "$@"
-        return $?
-    fi
-
-    "$@" &
-    local pid=$!
-    local elapsed=0
-    while kill -0 "$pid" 2>/dev/null; do
-        if (( elapsed >= seconds )); then
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            return 124
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    wait "$pid"
-}
-
 get_failures() {
     cat "$CONSECUTIVE_FAILURES_FILE" 2>/dev/null || echo 0
 }
@@ -94,7 +73,7 @@ check_runs_are_green() {
         return 1
     fi
 
-    if ! gh auth status -h github.com &>/dev/null; then
+    if ! run_with_timeout 30 gh auth status -h github.com &>/dev/null; then
         log "Guarded auto-pull skipped for $label: gh is not authenticated"
         return 1
     fi
@@ -313,7 +292,7 @@ fi
 # Capture current search-index.json schema version before update (for change detection)
 OLD_SCHEMA_VERSION=""
 if command -v jq &>/dev/null; then
-    OLD_SCHEMA_VERSION=$(curl -sf "$SITE_URL/search-index.json" 2>/dev/null | jq -r '.meta.version // "unknown"' 2>/dev/null || echo "unknown")
+    OLD_SCHEMA_VERSION=$(run_with_timeout 30 curl -sf "$SITE_URL/search-index.json" 2>/dev/null | jq -r '.meta.version // "unknown"' 2>/dev/null || echo "unknown")
     log "Current search-index schema: v$OLD_SCHEMA_VERSION"
 fi
 
