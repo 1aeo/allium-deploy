@@ -104,6 +104,20 @@ install_cfpages_test_script() {
     chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
 }
 
+prepare_guarded_pull_test() {
+    local clone="$1"
+    local checks_payload="$2"
+
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    unset GH_AUTH_EXIT
+    export GH_CHECKS_PAYLOAD="$checks_payload"
+    # shellcheck disable=SC2034
+    ALLIUM_REPO_DIR="$clone"
+    unset ALLIUM_ROLLBACK_SHA
+    source_update_script
+}
+
 test_green_pull() {
     local parts seed clone old new
     parts=$(init_repo_pair master green)
@@ -112,12 +126,7 @@ test_green_pull() {
     push_remote_commit "$seed" master "green"
     new=$(git -C "$seed" rev-parse HEAD)
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
 
     guarded_pull_allium
 
@@ -147,12 +156,7 @@ test_no_check_runs_skip_pull() {
     old=$(git -C "$clone" rev-parse HEAD)
     push_remote_commit "$seed" master "unchecked"
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":0,"check_runs":[]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":0,"check_runs":[]}'
 
     guarded_pull_allium
 
@@ -178,12 +182,7 @@ test_not_green_skip() {
     old=$(git -C "$clone" rev-parse HEAD)
     push_remote_commit "$seed" master "blocked"
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"failure"}]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"failure"}]}'
 
     guarded_pull_allium
 
@@ -204,12 +203,7 @@ test_ff_fail_skip() {
     old=$(git -C "$clone" rev-parse HEAD)
     push_remote_commit "$seed" master "remote"
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
 
     guarded_pull_allium
 
@@ -226,12 +220,7 @@ test_dirty_worktree_skips_pull() {
     push_remote_commit "$seed" master "remote"
     printf 'dirty\n' >> "$clone/file.txt"
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
 
     guarded_pull_allium
 
@@ -247,12 +236,7 @@ test_fetch_failure_skips_pull() {
     old=$(git -C "$clone" rev-parse HEAD)
     git -C "$clone" remote set-url origin "$TMP_DIR/missing-origin.git"
 
-    export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
-    source_update_script
-    ALLIUM_REPO_DIR="$clone"
-    unset ALLIUM_ROLLBACK_SHA
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
 
     guarded_pull_allium
 
