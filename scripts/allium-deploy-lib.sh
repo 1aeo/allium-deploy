@@ -15,6 +15,15 @@ run_with_timeout() {
     while kill -0 "$pid" 2>/dev/null; do
         if (( elapsed >= seconds )); then
             kill "$pid" 2>/dev/null || true
+            local grace_elapsed=0
+            while kill -0 "$pid" 2>/dev/null; do
+                if (( grace_elapsed >= 5 )); then
+                    kill -KILL "$pid" 2>/dev/null || true
+                    break
+                fi
+                sleep 1
+                grace_elapsed=$((grace_elapsed + 1))
+            done
             wait "$pid" 2>/dev/null || true
             return 124
         fi
