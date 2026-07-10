@@ -8,14 +8,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=./scripts/allium-deploy-lib.sh
+source "$SCRIPT_DIR/allium-deploy-lib.sh"
+
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
-else
+elif [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" != "1" ]]; then
     echo "Error: config.env not found"
     exit 1
 fi
 
-ALLIUM_DIR="${ALLIUM_DIR:-$HOME/allium}/allium"
+ALLIUM_CONFIG_DIR="${ALLIUM_REPO_DIR:-${ALLIUM_DIR:-$HOME/allium}}"
+ALLIUM_CONFIG_DIR="${ALLIUM_CONFIG_DIR%/}"
+if [[ -d "$ALLIUM_CONFIG_DIR/.git" ]]; then
+    ALLIUM_REPO_DIR="$ALLIUM_CONFIG_DIR"
+elif [[ -d "$ALLIUM_CONFIG_DIR/../.git" ]]; then
+    ALLIUM_REPO_DIR="$(cd "$ALLIUM_CONFIG_DIR/.." && pwd)"
+else
+    ALLIUM_REPO_DIR="$ALLIUM_CONFIG_DIR"
+fi
+if [[ -f "$ALLIUM_CONFIG_DIR/allium.py" ]]; then
+    ALLIUM_DIR="$ALLIUM_CONFIG_DIR"
+else
+    ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/metrics-output}"
 SITE_URL="${SITE_URL:-https://metrics.example.com}"
 CONSECUTIVE_FAILURES_FILE="/tmp/allium-deploy-failures"
@@ -40,6 +56,144 @@ increment_failures() {
 reset_failures() {
     echo 0 > "$CONSECUTIVE_FAILURES_FILE"
 }
+
+check_runs_are_green() {
+    local repo="$1"
+    local sha="$2"
+    local label="$3"
+    local payload total failing summary
+
+    if ! command -v gh &>/dev/null; then
+        log "Guarded auto-pull skipped for $label: gh is not installed"
+        return 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        log "Guarded auto-pull skipped for $label: jq is not installed"
+        return 1
+    fi
+
+    if ! run_with_timeout 30 gh auth status -h github.com &>/dev/null; then
+        log "Guarded auto-pull skipped for $label: gh is not authenticated"
+        return 1
+    fi
+
+    if ! payload=$(run_with_timeout 30 gh api --paginate -H "Accept: application/vnd.github+json" "/repos/$repo/commits/$sha/check-runs?per_page=100" 2>/dev/null); then
+        log "Guarded auto-pull skipped for $label@$sha: could not read GitHub check-runs"
+        return 1
+    fi
+
+    total=$(jq -s -r '[.[].check_runs[]] | length' <<< "$payload" 2>/dev/null || echo 0)
+    if (( total < 1 )); then
+        log "Guarded auto-pull skipped for $label@$sha: no GitHub check-runs found"
+        return 1
+    fi
+
+    failing=$(jq -s -r '[.[].check_runs[] | select(.status != "completed" or .conclusion != "success")] | length' <<< "$payload" 2>/dev/null || echo 1)
+    if (( failing == 0 )); then
+        return 0
+    fi
+
+    summary=$(jq -s -r '[
+        .[].check_runs[]
+        | select(.status != "completed" or .conclusion != "success")
+        | "\(.name):\(.status)/\(.conclusion // "null")"
+    ] | join(";")' <<< "$payload" 2>/dev/null || true)
+    log "Guarded auto-pull skipped for $label@$sha: checks not all success (${summary:-unknown})"
+    return 1
+}
+
+guarded_pull_repo() {
+    local label="$1"
+    local repo_dir="$2"
+    local github_repo="$3"
+    local branch="$4"
+    local rollback_var="$5"
+    local current_branch pre_sha remote_sha post_sha
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        log "Guarded auto-pull skipped for $label: $repo_dir is not a git checkout"
+        return 0
+    fi
+
+    if ! git -C "$repo_dir" diff --quiet || ! git -C "$repo_dir" diff --cached --quiet; then
+        log "Guarded auto-pull skipped for $label: tracked working tree changes are present"
+        return 0
+    fi
+
+    pre_sha=$(git -C "$repo_dir" rev-parse HEAD)
+
+    if ! run_with_timeout 30 git -C "$repo_dir" fetch origin "$branch" >/dev/null 2>&1; then
+        log "Guarded auto-pull skipped for $label@$pre_sha: git fetch origin $branch failed"
+        return 0
+    fi
+
+    remote_sha=$(git -C "$repo_dir" rev-parse "origin/$branch")
+    if [[ "$pre_sha" == "$remote_sha" ]]; then
+        log "Guarded auto-pull: $label already current at $pre_sha"
+        return 0
+    fi
+
+    if ! check_runs_are_green "$github_repo" "$remote_sha" "$label"; then
+        return 0
+    fi
+
+    current_branch=$(git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [[ "$current_branch" != "$branch" ]]; then
+        log "Guarded auto-pull skipped for $label: checkout is on ${current_branch:-detached HEAD}, expected $branch"
+        return 0
+    fi
+
+    if ! git -C "$repo_dir" merge --ff-only "origin/$branch" >/dev/null 2>&1; then
+        log "Guarded auto-pull skipped for $label: $pre_sha cannot fast-forward to $remote_sha"
+        return 0
+    fi
+
+    post_sha=$(git -C "$repo_dir" rev-parse HEAD)
+    printf -v "$rollback_var" '%s' "$pre_sha"
+    export "${rollback_var?}"
+    log "Guarded auto-pull: $label $pre_sha -> $post_sha"
+}
+
+guarded_pull_allium() {
+    guarded_pull_repo "allium" "$ALLIUM_REPO_DIR" "1aeo/allium" "master" "ALLIUM_ROLLBACK_SHA"
+}
+
+guarded_pull_allium_deploy() {
+    guarded_pull_repo "allium-deploy" "$DEPLOY_DIR" "1aeo/allium-deploy" "main" "ALLIUM_DEPLOY_ROLLBACK_SHA"
+}
+
+rollback_repo_to_sha() {
+    local label="$1"
+    local repo_dir="$2"
+    local sha="$3"
+
+    if [[ -z "$sha" ]]; then
+        return 0
+    fi
+
+    if git -C "$repo_dir" reset --hard "$sha" >/dev/null 2>&1; then
+        log "Rolled back $label checkout to $sha"
+    else
+        log "Failed to roll back $label checkout to $sha"
+        return 1
+    fi
+}
+
+rollback_guarded_pulls() {
+    local failed=false
+
+    rollback_repo_to_sha "allium" "$ALLIUM_REPO_DIR" "${ALLIUM_ROLLBACK_SHA:-}" || failed=true
+    rollback_repo_to_sha "allium-deploy" "$DEPLOY_DIR" "${ALLIUM_DEPLOY_ROLLBACK_SHA:-}" || failed=true
+
+    if [[ "$failed" == "true" ]]; then
+        return 1
+    fi
+}
+
+if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # Cloudflare CDN purge (runs once after all uploads)
 purge_cdn() {
@@ -136,12 +290,21 @@ log "========================================"
 log "Starting metrics update..."
 log "Storage order: $STORAGE_ORDER"
 
+if [[ ! -f "$ALLIUM_DIR/allium.py" ]]; then
+    log "❌ Could not locate allium.py under $ALLIUM_CONFIG_DIR or $ALLIUM_DIR"
+    exit 1
+fi
+
 # Capture current search-index.json schema version before update (for change detection)
 OLD_SCHEMA_VERSION=""
 if command -v jq &>/dev/null; then
-    OLD_SCHEMA_VERSION=$(curl -sf "$SITE_URL/search-index.json" 2>/dev/null | jq -r '.meta.version // "unknown"' 2>/dev/null || echo "unknown")
+    OLD_SCHEMA_VERSION=$(run_with_timeout 30 curl -sf "$SITE_URL/search-index.json" 2>/dev/null | jq -r '.meta.version // "unknown"' 2>/dev/null || echo "unknown")
     log "Current search-index schema: v$OLD_SCHEMA_VERSION"
 fi
+
+log "Checking guarded auto-pulls..."
+guarded_pull_allium_deploy
+guarded_pull_allium
 
 # Start background prune (only if less than 3 consecutive failures)
 failures=$(get_failures)
@@ -162,7 +325,12 @@ if python3 -u allium.py --out "$OUTPUT_DIR" --base-url "$SITE_URL" --progress; t
 else
     log "❌ Allium failed"
     increment_failures
+    ROLLBACK_SUCCESS=true
+    rollback_guarded_pulls || ROLLBACK_SUCCESS=false
     [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
+    if [[ "$ROLLBACK_SUCCESS" != "true" ]]; then
+        log "❌ One or more guarded-pull rollbacks failed - manual checkout repair required"
+    fi
     exit 1
 fi
 
