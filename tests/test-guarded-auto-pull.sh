@@ -46,6 +46,22 @@ source_update_script() {
     source "$ROOT_DIR/scripts/allium-deploy-update.sh"
 }
 
+test_allium_path_derivation() {
+    local repo_root from_root from_subdir
+    repo_root="$TMP_DIR/path-repo"
+    git init -b master "$repo_root" >/dev/null
+    mkdir -p "$repo_root/allium"
+    touch "$repo_root/allium/allium.py"
+
+    from_root=$(ALLIUM_DEPLOY_TEST_MODE=1 ALLIUM_DIR="$repo_root" bash -c 'source "$1"; printf "%s|%s\n" "$ALLIUM_REPO_DIR" "$ALLIUM_DIR"' _ "$ROOT_DIR/scripts/allium-deploy-update.sh")
+    [[ "$from_root" == "$repo_root|$repo_root/allium" ]] || fail "repo-root ALLIUM_DIR derived unexpected paths: $from_root"
+
+    from_subdir=$(ALLIUM_DEPLOY_TEST_MODE=1 ALLIUM_DIR="$repo_root/allium" bash -c 'source "$1"; printf "%s|%s\n" "$ALLIUM_REPO_DIR" "$ALLIUM_DIR"' _ "$ROOT_DIR/scripts/allium-deploy-update.sh")
+    [[ "$from_subdir" == "$repo_root|$repo_root/allium" ]] || fail "generator-dir ALLIUM_DIR derived unexpected paths: $from_subdir"
+
+    pass "allium path derivation supports repo root and generator dir"
+}
+
 init_repo_pair() {
     local branch="$1"
     local name="$2"
@@ -173,6 +189,8 @@ test_rollback_both() {
 
     [[ "$(git -C "$allium_clone" rev-parse HEAD)" == "$allium_old" ]] || fail "allium rollback did not restore pre-pull sha"
     [[ "$(git -C "$deploy_clone" rev-parse HEAD)" == "$deploy_old" ]] || fail "allium-deploy rollback did not restore pre-pull sha"
+    [[ "$(git -C "$allium_clone" branch --show-current)" == "master" ]] || fail "allium rollback detached branch"
+    [[ "$(git -C "$deploy_clone" branch --show-current)" == "main" ]] || fail "allium-deploy rollback detached branch"
     pass "rollback restores both pulled checkouts"
 }
 
@@ -192,6 +210,7 @@ test_stale_cfpages_refuses_deploy() {
     pass "stale Pages checkout refuses deploy"
 }
 
+test_allium_path_derivation
 test_green_pull
 test_not_green_skip
 test_ff_fail_skip

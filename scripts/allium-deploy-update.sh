@@ -15,8 +15,22 @@ elif [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" != "1" ]]; then
     exit 1
 fi
 
-ALLIUM_REPO_DIR="${ALLIUM_REPO_DIR:-${ALLIUM_DIR:-$HOME/allium}}"
-ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
+ALLIUM_CONFIG_DIR="${ALLIUM_REPO_DIR:-${ALLIUM_DIR:-$HOME/allium}}"
+ALLIUM_CONFIG_DIR="${ALLIUM_CONFIG_DIR%/}"
+if [[ -d "$ALLIUM_CONFIG_DIR/.git" ]]; then
+    ALLIUM_REPO_DIR="$ALLIUM_CONFIG_DIR"
+elif [[ -d "$ALLIUM_CONFIG_DIR/../.git" ]]; then
+    ALLIUM_REPO_DIR="$(cd "$ALLIUM_CONFIG_DIR/.." && pwd)"
+else
+    ALLIUM_REPO_DIR="$ALLIUM_CONFIG_DIR"
+fi
+if [[ -f "$ALLIUM_CONFIG_DIR/allium.py" ]]; then
+    ALLIUM_DIR="$ALLIUM_CONFIG_DIR"
+elif [[ -f "$ALLIUM_REPO_DIR/allium/allium.py" ]]; then
+    ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
+else
+    ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/metrics-output}"
 SITE_URL="${SITE_URL:-https://metrics.example.com}"
 CONSECUTIVE_FAILURES_FILE="/tmp/allium-deploy-failures"
@@ -151,16 +165,23 @@ rollback_repo_to_sha() {
         return 0
     fi
 
-    if git -C "$repo_dir" checkout "$sha" >/dev/null 2>&1; then
+    if git -C "$repo_dir" reset --hard "$sha" >/dev/null 2>&1; then
         log "Rolled back $label checkout to $sha"
     else
         log "Failed to roll back $label checkout to $sha"
+        return 1
     fi
 }
 
 rollback_guarded_pulls() {
-    rollback_repo_to_sha "allium" "$ALLIUM_REPO_DIR" "${ALLIUM_ROLLBACK_SHA:-}"
-    rollback_repo_to_sha "allium-deploy" "$DEPLOY_DIR" "${ALLIUM_DEPLOY_ROLLBACK_SHA:-}"
+    local failed=false
+
+    rollback_repo_to_sha "allium" "$ALLIUM_REPO_DIR" "${ALLIUM_ROLLBACK_SHA:-}" || failed=true
+    rollback_repo_to_sha "allium-deploy" "$DEPLOY_DIR" "${ALLIUM_DEPLOY_ROLLBACK_SHA:-}" || failed=true
+
+    if [[ "$failed" == "true" ]]; then
+        return 1
+    fi
 }
 
 if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
@@ -292,8 +313,12 @@ if python3 -u allium.py --out "$OUTPUT_DIR" --base-url "$SITE_URL" --progress; t
 else
     log "❌ Allium failed"
     increment_failures
-    rollback_guarded_pulls
+    ROLLBACK_SUCCESS=true
+    rollback_guarded_pulls || ROLLBACK_SUCCESS=false
     [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
+    if [[ "$ROLLBACK_SUCCESS" != "true" ]]; then
+        log "❌ One or more guarded-pull rollbacks failed - manual checkout repair required"
+    fi
     exit 1
 fi
 
