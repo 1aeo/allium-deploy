@@ -68,7 +68,7 @@ test_empty_backup_sets_skip_cleanly() {
 }
 
 test_multiple_backups_prune_oldest() {
-    local backup_dir rclone_dir purge_log i r2_listing remaining purged expected_purges
+    local backup_dir rclone_dir purge_log i name r2_listing remaining purged expected_purges
     backup_dir="$TMP_DIR/multi local"
     rclone_dir="$TMP_DIR/rclone bin multi"
     purge_log="$TMP_DIR/multi-purge.log"
@@ -77,9 +77,13 @@ test_multiple_backups_prune_oldest() {
 
     r2_listing=""
     for i in 1 2 3 4 5 6 7 8; do
-        mkdir -p "$backup_dir/backup-0$i"
-        touch -t "20260101010$i" "$backup_dir/backup-0$i"
-        r2_listing+="backup-0$i/"$'\n'
+        name="backup-0$i"
+        if [[ "$i" == "1" ]]; then
+            name="backup-01 old"
+        fi
+        mkdir -p "$backup_dir/$name"
+        touch -t "20260101010$i" "$backup_dir/$name"
+        r2_listing+="$name/"$'\n'
     done
 
     run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing"
@@ -88,10 +92,34 @@ test_multiple_backups_prune_oldest() {
     [[ "$remaining" == "backup-04 backup-05 backup-06 backup-07 backup-08" ]] || fail "unexpected local backups remain: $remaining"
 
     purged=$(sort "$purge_log" | paste -sd ' ' -)
-    expected_purges="r2-metrics:test-bucket/_backups/backup-01/ r2-metrics:test-bucket/_backups/backup-02/ r2-metrics:test-bucket/_backups/backup-03/"
+    expected_purges="r2-metrics:test-bucket/_backups/backup-01 old/ r2-metrics:test-bucket/_backups/backup-02/ r2-metrics:test-bucket/_backups/backup-03/"
     [[ "$purged" == "$expected_purges" ]] || fail "unexpected R2 purges: $purged"
     pass "multiple local and R2 backups prune oldest entries"
 }
 
+test_safety_buffer_boundary_skips_prune() {
+    local backup_dir rclone_dir purge_log i r2_listing remaining
+    backup_dir="$TMP_DIR/boundary local"
+    rclone_dir="$TMP_DIR/rclone bin boundary"
+    purge_log="$TMP_DIR/boundary-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+
+    r2_listing=""
+    for i in 1 2 3 4 5 6 7; do
+        mkdir -p "$backup_dir/backup-0$i"
+        touch -t "20260101010$i" "$backup_dir/backup-0$i"
+        r2_listing+="backup-0$i/"$'\n'
+    done
+
+    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing"
+
+    remaining=$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -exec basename {} \; | sort | paste -sd ' ' -)
+    [[ "$remaining" == "backup-01 backup-02 backup-03 backup-04 backup-05 backup-06 backup-07" ]] || fail "boundary local backups changed: $remaining"
+    [[ ! -s "$purge_log" ]] || fail "boundary R2 listing triggered purge"
+    pass "safety buffer boundary skips local and R2 pruning"
+}
+
 test_empty_backup_sets_skip_cleanly
 test_multiple_backups_prune_oldest
+test_safety_buffer_boundary_skips_prune
