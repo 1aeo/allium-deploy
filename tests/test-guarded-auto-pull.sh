@@ -117,6 +117,16 @@ test_green_pull() {
     pass "green check-runs allow fast-forward"
 }
 
+test_paginated_check_runs() {
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_gh_stub "$TMP_DIR/bin"
+    export GH_CHECKS_PAYLOAD=$'{"total_count":1,"check_runs":[{"name":"lint","status":"completed","conclusion":"success"}]}\n{"total_count":1,"check_runs":[{"name":"test","status":"completed","conclusion":"success"}]}'
+    source_update_script
+
+    check_runs_are_green "1aeo/allium" "deadbeef" "allium" || fail "paginated check-runs were not accepted"
+    pass "paginated check-runs are parsed across pages"
+}
+
 test_not_green_skip() {
     local parts seed clone old
     parts=$(init_repo_pair master notgreen)
@@ -210,9 +220,25 @@ test_stale_cfpages_refuses_deploy() {
     pass "stale Pages checkout refuses deploy"
 }
 
+test_fresh_cfpages_allows_deploy() {
+    local parts clone output
+    parts=$(init_repo_pair main fresh-cfpages)
+    IFS='|' read -r _ _ clone <<< "$parts"
+    mkdir -p "$clone/scripts"
+    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$clone/scripts/allium-deploy-cfpages.sh"
+    chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
+
+    if ! output=$(ALLIUM_CFPAGES_TEST_MODE=1 "$clone/scripts/allium-deploy-cfpages.sh" 2>&1); then
+        fail "fresh cfpages checkout was refused: $output"
+    fi
+    pass "fresh Pages checkout allows deploy"
+}
+
 test_allium_path_derivation
 test_green_pull
+test_paginated_check_runs
 test_not_green_skip
 test_ff_fail_skip
 test_rollback_both
 test_stale_cfpages_refuses_deploy
+test_fresh_cfpages_allows_deploy

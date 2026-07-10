@@ -17,6 +17,30 @@ if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
 fi
 
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout &>/dev/null; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+
+    "$@" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( elapsed >= seconds )); then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
+}
+
 assert_pages_checkout_fresh() {
     local head_sha origin_sha dirty_status
 
@@ -25,7 +49,7 @@ assert_pages_checkout_fresh() {
         return 1
     fi
 
-    if ! git -C "$DEPLOY_DIR" fetch origin main >/dev/null 2>&1; then
+    if ! run_with_timeout 30 git -C "$DEPLOY_DIR" fetch origin main >/dev/null 2>&1; then
         echo "❌ Refusing Pages deploy: could not fetch origin/main"
         return 1
     fi

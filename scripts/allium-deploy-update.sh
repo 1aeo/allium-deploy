@@ -26,8 +26,6 @@ else
 fi
 if [[ -f "$ALLIUM_CONFIG_DIR/allium.py" ]]; then
     ALLIUM_DIR="$ALLIUM_CONFIG_DIR"
-elif [[ -f "$ALLIUM_REPO_DIR/allium/allium.py" ]]; then
-    ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
 else
     ALLIUM_DIR="${ALLIUM_REPO_DIR%/}/allium"
 fi
@@ -42,6 +40,30 @@ DO_ENABLED="${DO_ENABLED:-false}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout &>/dev/null; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+
+    "$@" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( elapsed >= seconds )); then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
 }
 
 get_failures() {
@@ -77,7 +99,7 @@ check_runs_are_green() {
         return 1
     fi
 
-    if ! payload=$(gh api --paginate -H "Accept: application/vnd.github+json" "/repos/$repo/commits/$sha/check-runs?per_page=100" 2>/dev/null); then
+    if ! payload=$(run_with_timeout 30 gh api --paginate -H "Accept: application/vnd.github+json" "/repos/$repo/commits/$sha/check-runs?per_page=100" 2>/dev/null); then
         log "Guarded auto-pull skipped for $label@$sha: could not read GitHub check-runs"
         return 1
     fi
@@ -122,7 +144,7 @@ guarded_pull_repo() {
 
     pre_sha=$(git -C "$repo_dir" rev-parse HEAD)
 
-    if ! git -C "$repo_dir" fetch origin "$branch" >/dev/null 2>&1; then
+    if ! run_with_timeout 30 git -C "$repo_dir" fetch origin "$branch" >/dev/null 2>&1; then
         log "Guarded auto-pull skipped for $label@$pre_sha: git fetch origin $branch failed"
         return 0
     fi
@@ -144,7 +166,7 @@ guarded_pull_repo() {
 
     post_sha=$(git -C "$repo_dir" rev-parse HEAD)
     printf -v "$rollback_var" '%s' "$pre_sha"
-    export "$rollback_var"
+    export "${rollback_var?}"
     log "Guarded auto-pull: $label $pre_sha -> $post_sha"
 }
 
@@ -282,6 +304,11 @@ purge_cdn() {
 log "========================================"
 log "Starting metrics update..."
 log "Storage order: $STORAGE_ORDER"
+
+if [[ ! -f "$ALLIUM_DIR/allium.py" ]]; then
+    log "❌ Could not locate allium.py under $ALLIUM_CONFIG_DIR or $ALLIUM_DIR"
+    exit 1
+fi
 
 # Capture current search-index.json schema version before update (for change detection)
 OLD_SCHEMA_VERSION=""
