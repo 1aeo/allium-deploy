@@ -96,12 +96,17 @@ push_remote_commit() {
 }
 
 install_cfpages_test_script() {
-    local clone="$1"
+    local seed="$1"
+    local clone="$2"
 
-    mkdir -p "$clone/scripts"
-    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$clone/scripts/allium-deploy-cfpages.sh"
-    cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$clone/scripts/allium-deploy-lib.sh"
-    chmod +x "$clone/scripts/allium-deploy-cfpages.sh"
+    mkdir -p "$seed/scripts"
+    cp "$ROOT_DIR/scripts/allium-deploy-cfpages.sh" "$seed/scripts/allium-deploy-cfpages.sh"
+    cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$seed/scripts/allium-deploy-lib.sh"
+    chmod +x "$seed/scripts/allium-deploy-cfpages.sh"
+    git -C "$seed" add scripts/allium-deploy-cfpages.sh scripts/allium-deploy-lib.sh
+    git -C "$seed" commit -m "add cfpages script" >/dev/null
+    git -C "$seed" push origin main >/dev/null 2>&1
+    git -C "$clone" pull --ff-only >/dev/null 2>&1
 }
 
 prepare_guarded_pull_test() {
@@ -281,7 +286,7 @@ test_stale_cfpages_refuses_deploy() {
     local parts seed clone output
     parts=$(init_repo_pair main stale-cfpages)
     IFS='|' read -r _ seed clone <<< "$parts"
-    install_cfpages_test_script "$clone"
+    install_cfpages_test_script "$seed" "$clone"
     push_remote_commit "$seed" main "new-function"
 
     if output=$(ALLIUM_CFPAGES_TEST_MODE=1 "$clone/scripts/allium-deploy-cfpages.sh" 2>&1); then
@@ -292,10 +297,10 @@ test_stale_cfpages_refuses_deploy() {
 }
 
 test_fresh_cfpages_allows_deploy() {
-    local parts clone output
+    local parts seed clone output
     parts=$(init_repo_pair main fresh-cfpages)
-    IFS='|' read -r _ _ clone <<< "$parts"
-    install_cfpages_test_script "$clone"
+    IFS='|' read -r _ seed clone <<< "$parts"
+    install_cfpages_test_script "$seed" "$clone"
 
     if ! output=$(ALLIUM_CFPAGES_TEST_MODE=1 "$clone/scripts/allium-deploy-cfpages.sh" 2>&1); then
         fail "fresh cfpages checkout was refused: $output"

@@ -40,9 +40,9 @@ assert_pages_checkout_fresh() {
         return 1
     fi
 
-    dirty_status=$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=no)
+    dirty_status=$(git -C "$DEPLOY_DIR" status --porcelain)
     if [[ -n "$dirty_status" ]]; then
-        echo "❌ Refusing Pages deploy: tracked working tree changes are present"
+        echo "❌ Refusing Pages deploy: working tree changes are present"
         echo "$dirty_status"
         return 1
     fi
