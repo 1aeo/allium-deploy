@@ -109,7 +109,7 @@ guarded_pull_repo() {
     local github_repo="$3"
     local branch="$4"
     local rollback_var="$5"
-    local pre_sha remote_sha post_sha
+    local current_branch pre_sha remote_sha post_sha
 
     if [[ ! -d "$repo_dir/.git" ]]; then
         log "Guarded auto-pull skipped for $label: $repo_dir is not a git checkout"
@@ -135,6 +135,12 @@ guarded_pull_repo() {
     fi
 
     if ! check_runs_are_green "$github_repo" "$remote_sha" "$label"; then
+        return 0
+    fi
+
+    current_branch=$(git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [[ "$current_branch" != "$branch" ]]; then
+        log "Guarded auto-pull skipped for $label: checkout is on ${current_branch:-detached HEAD}, expected $branch"
         return 0
     fi
 

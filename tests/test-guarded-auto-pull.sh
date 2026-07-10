@@ -250,6 +250,24 @@ test_fetch_failure_skips_pull() {
     pass "fetch failure skips guarded pull"
 }
 
+test_wrong_branch_skips_pull() {
+    local parts seed clone old
+    parts=$(init_repo_pair master wrong-branch)
+    IFS='|' read -r _ seed clone <<< "$parts"
+    git -C "$clone" checkout -b side >/dev/null 2>&1
+    old=$(git -C "$clone" rev-parse HEAD)
+    push_remote_commit "$seed" master "remote"
+
+    prepare_guarded_pull_test "$clone" '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+
+    guarded_pull_allium
+
+    [[ "$(git -C "$clone" branch --show-current)" == "side" ]] || fail "wrong-branch checkout changed branches"
+    [[ "$(git -C "$clone" rev-parse HEAD)" == "$old" ]] || fail "wrong-branch checkout changed HEAD"
+    [[ -z "${ALLIUM_ROLLBACK_SHA:-}" ]] || fail "wrong-branch checkout recorded rollback sha"
+    pass "wrong branch skips guarded pull"
+}
+
 test_rollback_both() {
     local allium_parts deploy_parts allium_seed allium_clone deploy_seed deploy_clone allium_old deploy_old
     allium_parts=$(init_repo_pair master rollback-allium)
@@ -317,6 +335,7 @@ test_not_green_skip
 test_ff_fail_skip
 test_dirty_worktree_skips_pull
 test_fetch_failure_skips_pull
+test_wrong_branch_skips_pull
 test_rollback_both
 test_stale_cfpages_refuses_deploy
 test_fresh_cfpages_allows_deploy

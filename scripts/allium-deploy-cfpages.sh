@@ -16,10 +16,6 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
-if [[ -f "$DEPLOY_DIR/config.env" ]]; then
-    source "$DEPLOY_DIR/config.env"
-fi
-
 assert_pages_checkout_fresh() {
     local head_sha origin_sha dirty_status
 
@@ -51,6 +47,12 @@ assert_pages_checkout_fresh() {
 if [[ "${ALLIUM_CFPAGES_TEST_MODE:-}" == "1" ]]; then
     assert_pages_checkout_fresh
     exit $?
+fi
+
+assert_pages_checkout_fresh
+
+if [[ -f "$DEPLOY_DIR/config.env" ]]; then
+    source "$DEPLOY_DIR/config.env"
 fi
 
 # --- Check/Install Dependencies ---

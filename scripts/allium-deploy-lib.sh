@@ -5,7 +5,7 @@ run_with_timeout() {
     shift
 
     if command -v timeout &>/dev/null; then
-        timeout "$seconds" "$@"
+        timeout --kill-after=5 "$seconds" "$@"
         return $?
     fi
 
