@@ -45,6 +45,32 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+require_current_deploy_checkout() {
+    log "Verifying allium-deploy checkout before schema-triggered deploy..."
+
+    cd "$DEPLOY_DIR"
+    git fetch --quiet origin main
+
+    local local_head origin_head dirty
+    local_head="$(git rev-parse HEAD)"
+    origin_head="$(git rev-parse origin/main)"
+
+    if [[ "$local_head" != "$origin_head" ]]; then
+        log "refusing schema-triggered deploy: checkout HEAD $local_head is not origin/main $origin_head"
+        return 1
+    fi
+
+    dirty="$(git status --porcelain --untracked-files=normal)"
+    if [[ -n "$dirty" ]]; then
+        log "refusing schema-triggered deploy: working tree has tracked or unignored changes"
+        printf '%s\n' "$dirty" | sed 's/^/[dirty] /' >&2
+        return 1
+    fi
+
+    log "allium-deploy checkout is current and clean"
+    return 0
+}
+
 get_failures() {
     cat "$CONSECUTIVE_FAILURES_FILE" 2>/dev/null || echo 0
 }
@@ -341,8 +367,11 @@ if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
     if [[ "$OLD_SCHEMA_VERSION" != "unknown" ]] && [[ "$NEW_SCHEMA_VERSION" != "unknown" ]] && [[ "$OLD_SCHEMA_VERSION" != "$NEW_SCHEMA_VERSION" ]]; then
         log "⚠️  SEARCH-INDEX SCHEMA CHANGED: v$OLD_SCHEMA_VERSION → v$NEW_SCHEMA_VERSION"
         log "⚠️  Auto-deploying search.js to match new search-index schema..."
-        
-        if "$DEPLOY_DIR/scripts/allium-deploy-cfpages.sh" >> "$DEPLOY_DIR/logs/cfpages-deploy.log" 2>&1; then
+
+        if ! require_current_deploy_checkout; then
+            log "❌ search.js auto-deploy skipped - deploy checkout is not safe"
+            log "❌ Update/clean $DEPLOY_DIR, then run: $DEPLOY_DIR/scripts/allium-deploy-cfpages.sh"
+        elif "$DEPLOY_DIR/scripts/allium-deploy-cfpages.sh" >> "$DEPLOY_DIR/logs/cfpages-deploy.log" 2>&1; then
             log "✅ search.js auto-deployed successfully"
         else
             log "❌ search.js auto-deploy FAILED - manual deploy required!"
