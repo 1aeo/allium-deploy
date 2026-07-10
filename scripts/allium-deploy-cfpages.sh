@@ -17,6 +17,39 @@ if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
 fi
 
+assert_pages_checkout_fresh() {
+    local head_sha origin_sha dirty_status
+
+    if [[ ! -d "$DEPLOY_DIR/.git" ]]; then
+        echo "❌ Refusing Pages deploy: $DEPLOY_DIR is not a git checkout"
+        return 1
+    fi
+
+    if ! git -C "$DEPLOY_DIR" fetch origin main >/dev/null 2>&1; then
+        echo "❌ Refusing Pages deploy: could not fetch origin/main"
+        return 1
+    fi
+
+    head_sha=$(git -C "$DEPLOY_DIR" rev-parse HEAD)
+    origin_sha=$(git -C "$DEPLOY_DIR" rev-parse origin/main)
+    if [[ "$head_sha" != "$origin_sha" ]]; then
+        echo "❌ Refusing Pages deploy: checkout HEAD $head_sha does not match origin/main $origin_sha"
+        return 1
+    fi
+
+    dirty_status=$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=no)
+    if [[ -n "$dirty_status" ]]; then
+        echo "❌ Refusing Pages deploy: tracked working tree changes are present"
+        echo "$dirty_status"
+        return 1
+    fi
+}
+
+if [[ "${ALLIUM_CFPAGES_TEST_MODE:-}" == "1" ]]; then
+    assert_pages_checkout_fresh
+    exit $?
+fi
+
 # --- Check/Install Dependencies ---
 
 install_nodejs() {
@@ -244,6 +277,8 @@ echo "✅ Generated: $OUTPUT_FILE"
 echo ""
 echo "🚀 Deploying Cloudflare Pages function..."
 cd "$DEPLOY_DIR"
+
+assert_pages_checkout_fresh
 
 if command -v wrangler &>/dev/null; then
     wrangler pages deploy --branch=production --commit-dirty=true
