@@ -16,20 +16,27 @@ LOCAL_BACKUP_DIR="${BACKUP_DIR:-$HOME/metrics-backups}"
 BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
-SAFETY_BUFFER=2  # Only prune if we have KEEP + BUFFER backups
+SAFETY_BUFFER=2
 
 log() {
     echo "[PRUNE] [$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+count_lines() { local c; c=$(grep -c . <<< "$1" 2>/dev/null) || c=0; echo "$c"; }
+
 log "🧹 Prune starting..."
 
 # Local prune
 if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
-    local_count=$(ls -1d "$LOCAL_BACKUP_DIR"/backup-* 2>/dev/null | wc -l)
-    if [ "$local_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]; then
+    local_all=$(ls -1dt "$LOCAL_BACKUP_DIR"/backup-* 2>/dev/null) || local_all=""
+    local_count=$(count_lines "$local_all")
+    if [[ "$local_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
         log "🧹 Pruning local backups ($local_count found, keeping $KEEP_BACKUPS)..."
-        ls -1dt "$LOCAL_BACKUP_DIR"/backup-* | tail -n +$((KEEP_BACKUPS + 1)) | xargs rm -rf
+        local_to_delete=$(printf '%s\n' "$local_all" | tail -n +$((KEEP_BACKUPS + 1)))
+        while IFS= read -r backup_path; do
+            [[ -z "$backup_path" ]] && continue
+            rm -rf -- "$backup_path"
+        done <<< "$local_to_delete"
         log "✅ Local prune done"
     else
         log "⏭️ Local prune skipped ($local_count backups, need $((KEEP_BACKUPS + SAFETY_BUFFER + 1))+ to prune)"
@@ -37,18 +44,19 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
 fi
 
 # R2 prune
-r2_count=$($RCLONE lsf "$BUCKET/_backups/" --dirs-only 2>/dev/null | wc -l)
-if [ "$r2_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]; then
+r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>/dev/null) || r2_all=""
+r2_count=$(count_lines "$r2_all")
+if [[ "$r2_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
     log "🧹 Pruning R2 backups ($r2_count found, keeping $KEEP_BACKUPS)..."
-    r2_to_delete=$($RCLONE lsf "$BUCKET/_backups/" --dirs-only 2>/dev/null | sort -r | tail -n +$((KEEP_BACKUPS + 1)))
-    for backup in $r2_to_delete; do
+    r2_to_delete=$(printf '%s\n' "$r2_all" | sort -r | tail -n +$((KEEP_BACKUPS + 1)))
+    while IFS= read -r backup; do
+        [[ -z "$backup" ]] && continue
         log "   Removing $BUCKET/_backups/$backup"
-        $RCLONE purge "$BUCKET/_backups/$backup" 2>/dev/null || true
-    done
+        "$RCLONE" purge "$BUCKET/_backups/$backup" 2>/dev/null || true
+    done <<< "$r2_to_delete"
     log "✅ R2 prune done"
 else
     log "⏭️ R2 prune skipped ($r2_count backups, need $((KEEP_BACKUPS + SAFETY_BUFFER + 1))+ to prune)"
 fi
 
 log "🧹 Prune finished"
-
