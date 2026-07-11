@@ -24,13 +24,13 @@ log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $1"
 }
 
-run_wrangler() {
+wrangler_bin() {
     if [[ -x "$DEPLOY_DIR/node_modules/.bin/wrangler" ]]; then
-        "$DEPLOY_DIR/node_modules/.bin/wrangler" "$@"
+        printf '%s\n' "$DEPLOY_DIR/node_modules/.bin/wrangler"
     elif command -v wrangler >/dev/null 2>&1; then
-        wrangler "$@"
+        command -v wrangler
     else
-        log "wrangler is required; run pnpm install --frozen-lockfile first"
+        log "wrangler is required; run pnpm install --frozen-lockfile first" >&2
         return 127
     fi
 }
@@ -75,9 +75,16 @@ if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
 fi
 
 log "Reading latest Pages deployment for $PROJECT_NAME..."
-DEPLOYMENTS_JSON="$(run_wrangler pages deployment list \
+if ! WRANGLER_BIN="$(wrangler_bin)"; then
+    exit 1
+fi
+if ! DEPLOYMENTS_JSON="$(run_with_timeout 30 "$WRANGLER_BIN" pages deployment list \
     --project-name "$PROJECT_NAME" \
-    --json)"
+    --environment production \
+    --json)"; then
+    log "Could not list production Pages deployments for $PROJECT_NAME"
+    exit 1
+fi
 
 DEPLOYED_SHA="$(printf '%s' "$DEPLOYMENTS_JSON" | jq -r '
     def deployments:
@@ -109,10 +116,13 @@ DEPLOYED_SHA="$(printf '%s' "$DEPLOYMENTS_JSON" | jq -r '
       // $d.commit_hash?
       // $d.commitHash?
       // empty;
+    def deployment_successful($d):
+      normalized($d.Status? // $d.latest_stage.status? // $d.status?) == "success";
     (deployments
      | map(select(
-         normalized(deployment_branch(.)) == "production"
-         or normalized(deployment_environment(.)) == "production"))
+         (normalized(deployment_branch(.)) == "production"
+          or normalized(deployment_environment(.)) == "production")
+         and deployment_successful(.)))
      | .[0] // empty) as $d
     | deployment_source($d)
 ')"
