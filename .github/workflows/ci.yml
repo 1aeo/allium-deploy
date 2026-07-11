@@ -1,0 +1,37 @@
+name: Deploy CI
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-syntax:
+    name: Shell Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Check Bash scripts
+        run: |
+          find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: ShellCheck deploy scripts
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          find scripts -name '*.sh' -print0 |
+            xargs -0 shellcheck -x -e SC1091,SC2012,SC2034,SC2086,SC2295,SC2317,SC2015

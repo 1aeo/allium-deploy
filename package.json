@@ -1,0 +1,8 @@
+{
+  "name": "allium-deploy",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "devDependencies": {
+    "wrangler": "4.110.0"
+  }
+}
