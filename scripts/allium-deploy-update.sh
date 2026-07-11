@@ -11,9 +11,11 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
-if [[ -f "$DEPLOY_DIR/config.env" ]]; then
+if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
+    :
+elif [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
-elif [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" != "1" ]]; then
+else
     echo "Error: config.env not found"
     exit 1
 fi
