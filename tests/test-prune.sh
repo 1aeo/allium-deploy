@@ -23,9 +23,17 @@ set -euo pipefail
 
 case "${1:-}" in
     lsf)
+        if [[ -n "${RCLONE_LSF_ERROR:-}" ]]; then
+            echo "$RCLONE_LSF_ERROR" >&2
+            exit "${RCLONE_LSF_EXIT:-1}"
+        fi
         printf '%s\n' "${RCLONE_LSF_OUTPUT:-}"
         ;;
     purge)
+        if [[ -n "${RCLONE_PURGE_ERROR:-}" ]]; then
+            echo "$RCLONE_PURGE_ERROR" >&2
+            exit "${RCLONE_PURGE_EXIT:-1}"
+        fi
         printf '%s\n' "${2:?purge path required}" >> "${RCLONE_PURGE_LOG:?RCLONE_PURGE_LOG must be set}"
         ;;
     *)
@@ -49,7 +57,9 @@ run_prune() {
     RCLONE_PATH="$rclone_path" \
     RCLONE_PURGE_LOG="$purge_log" \
     RCLONE_LSF_OUTPUT="$r2_listing" \
-        "$ROOT_DIR/scripts/allium-deploy-prune.sh" >/dev/null
+    RCLONE_LSF_ERROR="${RCLONE_LSF_ERROR:-}" \
+    RCLONE_PURGE_ERROR="${RCLONE_PURGE_ERROR:-}" \
+        "$ROOT_DIR/scripts/allium-deploy-prune.sh"
 }
 
 test_empty_backup_sets_skip_cleanly() {
@@ -60,7 +70,7 @@ test_empty_backup_sets_skip_cleanly() {
     mkdir -p "$backup_dir"
     make_rclone_stub "$rclone_dir"
 
-    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" ""
+    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" >/dev/null
 
     [[ -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "empty local backup dir changed"
     [[ ! -s "$purge_log" ]] || fail "empty R2 listing triggered purge"
@@ -86,7 +96,7 @@ test_multiple_backups_prune_oldest() {
         r2_listing+="$name/"$'\n'
     done
 
-    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing"
+    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing" >/dev/null
 
     remaining=$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -exec basename {} \; | sort | paste -sd ' ' -)
     [[ "$remaining" == "backup-04 backup-05 backup-06 backup-07 backup-08" ]] || fail "unexpected local backups remain: $remaining"
@@ -112,7 +122,7 @@ test_safety_buffer_boundary_skips_prune() {
         r2_listing+="backup-0$i/"$'\n'
     done
 
-    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing"
+    run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing" >/dev/null
 
     remaining=$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -exec basename {} \; | sort | paste -sd ' ' -)
     [[ "$remaining" == "backup-01 backup-02 backup-03 backup-04 backup-05 backup-06 backup-07" ]] || fail "boundary local backups changed: $remaining"
@@ -120,6 +130,63 @@ test_safety_buffer_boundary_skips_prune() {
     pass "safety buffer boundary skips local and R2 pruning"
 }
 
+test_r2_listing_failure_is_reported() {
+    local backup_dir rclone_dir purge_log output
+    backup_dir="$TMP_DIR/r2-lsf-fail"
+    rclone_dir="$TMP_DIR/rclone bin r2 lsf fail"
+    purge_log="$TMP_DIR/r2-lsf-fail-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+
+    if output=$(RCLONE_LSF_ERROR="r2 auth failed" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        fail "R2 listing failure was treated as success"
+    fi
+    grep -q "R2 backup enumeration failed: r2 auth failed" <<< "$output" || fail "R2 listing failure was not reported: $output"
+    pass "R2 listing failures are reported"
+}
+
+test_r2_purge_failure_is_reported() {
+    local backup_dir rclone_dir purge_log i r2_listing output
+    backup_dir="$TMP_DIR/r2-purge-fail"
+    rclone_dir="$TMP_DIR/rclone bin r2 purge fail"
+    purge_log="$TMP_DIR/r2-purge-fail-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+
+    r2_listing=""
+    for i in 1 2 3 4 5 6 7 8; do
+        r2_listing+="backup-0$i/"$'\n'
+    done
+
+    if output=$(RCLONE_PURGE_ERROR="r2 purge failed" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing" 2>&1); then
+        fail "R2 purge failure was treated as success"
+    fi
+    grep -q "Failed to remove R2 backup" <<< "$output" || fail "R2 purge failure was not reported: $output"
+    grep -q "R2 prune completed with one or more purge failures" <<< "$output" || fail "R2 purge failure did not fail the prune: $output"
+    pass "R2 purge failures are reported"
+}
+
+test_local_enumeration_failure_is_reported() {
+    local backup_dir rclone_dir purge_log output
+    backup_dir="$TMP_DIR/local-enum-fail"
+    rclone_dir="$TMP_DIR/rclone bin local enum fail"
+    purge_log="$TMP_DIR/local-enum-fail-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+    chmod 000 "$backup_dir"
+
+    if output=$(run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        chmod 700 "$backup_dir"
+        fail "local enumeration failure was treated as success"
+    fi
+    chmod 700 "$backup_dir"
+    grep -q "Local backup enumeration failed" <<< "$output" || fail "local enumeration failure was not reported: $output"
+    pass "local enumeration failures are reported"
+}
+
 test_empty_backup_sets_skip_cleanly
 test_multiple_backups_prune_oldest
 test_safety_buffer_boundary_skips_prune
+test_r2_listing_failure_is_reported
+test_r2_purge_failure_is_reported
+test_local_enumeration_failure_is_reported

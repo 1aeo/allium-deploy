@@ -28,14 +28,31 @@ log "🧹 Prune starting..."
 
 # Local prune
 if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
-    local_all=$(ls -1dt "$LOCAL_BACKUP_DIR"/backup-* 2>/dev/null) || local_all=""
+    if [[ ! -r "$LOCAL_BACKUP_DIR" ]] || [[ ! -x "$LOCAL_BACKUP_DIR" ]]; then
+        log "❌ Local backup enumeration failed: cannot read $LOCAL_BACKUP_DIR"
+        exit 1
+    fi
+
+    shopt -s nullglob
+    local_backups=("$LOCAL_BACKUP_DIR"/backup-*)
+    shopt -u nullglob
+    local_all=""
+    if (( ${#local_backups[@]} > 0 )); then
+        if ! local_all=$(ls -1dt "${local_backups[@]}" 2>&1); then
+            log "❌ Local backup enumeration failed: $local_all"
+            exit 1
+        fi
+    fi
     local_count=$(count_lines "$local_all")
     if [[ "$local_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
         log "🧹 Pruning local backups ($local_count found, keeping $KEEP_BACKUPS)..."
         local_to_delete=$(printf '%s\n' "$local_all" | tail -n +$((KEEP_BACKUPS + 1)))
         while IFS= read -r backup_path; do
             [[ -z "$backup_path" ]] && continue
-            rm -rf -- "$backup_path"
+            if ! rm -rf -- "$backup_path"; then
+                log "❌ Failed to remove local backup: $backup_path"
+                exit 1
+            fi
         done <<< "$local_to_delete"
         log "✅ Local prune done"
     else
@@ -44,16 +61,27 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
 fi
 
 # R2 prune
-r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>/dev/null) || r2_all=""
+if ! r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>&1); then
+    log "❌ R2 backup enumeration failed: $r2_all"
+    exit 1
+fi
 r2_count=$(count_lines "$r2_all")
 if [[ "$r2_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
+    r2_purge_failed=false
     log "🧹 Pruning R2 backups ($r2_count found, keeping $KEEP_BACKUPS)..."
     r2_to_delete=$(printf '%s\n' "$r2_all" | sort -r | tail -n +$((KEEP_BACKUPS + 1)))
     while IFS= read -r backup; do
         [[ -z "$backup" ]] && continue
         log "   Removing $BUCKET/_backups/$backup"
-        "$RCLONE" purge "$BUCKET/_backups/$backup" 2>/dev/null || true
+        if ! purge_output=$("$RCLONE" purge "$BUCKET/_backups/$backup" 2>&1); then
+            log "⚠️ Failed to remove R2 backup $BUCKET/_backups/$backup: ${purge_output:-unknown error}"
+            r2_purge_failed=true
+        fi
     done <<< "$r2_to_delete"
+    if [[ "$r2_purge_failed" == "true" ]]; then
+        log "❌ R2 prune completed with one or more purge failures"
+        exit 1
+    fi
     log "✅ R2 prune done"
 else
     log "⏭️ R2 prune skipped ($r2_count backups, need $((KEEP_BACKUPS + SAFETY_BUFFER + 1))+ to prune)"
