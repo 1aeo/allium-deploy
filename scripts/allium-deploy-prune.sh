@@ -8,6 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=./scripts/allium-deploy-lib.sh
+source "$SCRIPT_DIR/allium-deploy-lib.sh"
+
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     source "$DEPLOY_DIR/config.env"
 fi
@@ -62,7 +65,7 @@ fi
 
 # R2 prune
 r2_error_file=$(mktemp)
-if ! r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>"$r2_error_file"); then
+if ! r2_all=$(run_with_timeout 300 "$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>"$r2_error_file"); then
     r2_error=$(cat "$r2_error_file" 2>/dev/null || true)
     rm -f "$r2_error_file"
     log "❌ R2 backup enumeration failed: ${r2_error:-unknown error}"

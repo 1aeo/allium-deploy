@@ -194,9 +194,34 @@ test_local_enumeration_failure_is_reported() {
     pass "local enumeration failures are reported"
 }
 
+test_local_permission_failure_is_reported() {
+    local backup_dir rclone_dir purge_log output
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        pass "local permission failure test skipped under root"
+        return
+    fi
+
+    backup_dir="$TMP_DIR/local-perm-fail"
+    rclone_dir="$TMP_DIR/rclone bin local perm fail"
+    purge_log="$TMP_DIR/local-perm-fail-purge.log"
+    mkdir -p "$backup_dir/backup-01"
+    make_rclone_stub "$rclone_dir"
+    chmod 000 "$backup_dir"
+
+    if output=$(run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        chmod 700 "$backup_dir"
+        fail "local permission failure was treated as success"
+    fi
+    chmod 700 "$backup_dir"
+    grep -q "Local backup enumeration failed" <<< "$output" || fail "local permission failure was not reported: $output"
+    pass "local permission failures are reported"
+}
+
 test_empty_backup_sets_skip_cleanly
 test_multiple_backups_prune_oldest
 test_safety_buffer_boundary_skips_prune
 test_r2_listing_failure_is_reported
 test_r2_purge_failure_is_reported
 test_local_enumeration_failure_is_reported
+test_local_permission_failure_is_reported
