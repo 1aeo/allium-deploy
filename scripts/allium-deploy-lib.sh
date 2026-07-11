@@ -5,8 +5,17 @@ run_with_timeout() {
     shift
 
     if command -v timeout &>/dev/null; then
+        local start status end
+        start=$(date +%s)
         timeout --kill-after=5 "$seconds" "$@"
-        return $?
+        status=$?
+        if [[ "$status" -eq 137 ]]; then
+            end=$(date +%s)
+            if (( end - start >= seconds )); then
+                return 124
+            fi
+        fi
+        return "$status"
     fi
 
     "$@" &
