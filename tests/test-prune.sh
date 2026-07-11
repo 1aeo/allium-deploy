@@ -26,8 +26,10 @@ case "${1:-}" in
         if [[ -n "${RCLONE_LSF_SLEEP:-}" ]]; then
             sleep "$RCLONE_LSF_SLEEP"
         fi
-        if [[ -n "${RCLONE_LSF_ERROR:-}" ]]; then
-            echo "$RCLONE_LSF_ERROR" >&2
+        if [[ -n "${RCLONE_LSF_ERROR:-}" || -n "${RCLONE_LSF_EXIT:-}" ]]; then
+            if [[ -n "${RCLONE_LSF_ERROR:-}" ]]; then
+                echo "$RCLONE_LSF_ERROR" >&2
+            fi
             exit "${RCLONE_LSF_EXIT:-1}"
         fi
         printf '%s\n' "${RCLONE_LSF_OUTPUT:-}"
@@ -73,6 +75,7 @@ run_prune() {
     RCLONE_PURGE_LOG="$purge_log" \
     RCLONE_LSF_OUTPUT="$r2_listing" \
     RCLONE_LSF_ERROR="${RCLONE_LSF_ERROR:-}" \
+    RCLONE_LSF_EXIT="${RCLONE_LSF_EXIT:-}" \
     RCLONE_LSF_SLEEP="${RCLONE_LSF_SLEEP:-}" \
     RCLONE_PURGE_ERROR="${RCLONE_PURGE_ERROR:-}" \
         "$ROOT_DIR/scripts/allium-deploy-prune.sh"
@@ -176,6 +179,21 @@ test_r2_listing_timeout_is_reported() {
     pass "R2 listing timeouts are reported"
 }
 
+test_r2_listing_sigkill_timeout_is_reported() {
+    local backup_dir rclone_dir purge_log output
+    backup_dir="$TMP_DIR/r2-lsf-sigkill-timeout"
+    rclone_dir="$TMP_DIR/rclone bin r2 lsf sigkill timeout"
+    purge_log="$TMP_DIR/r2-lsf-sigkill-timeout-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+
+    if output=$(RCLONE_LSF_EXIT=137 R2_LIST_TIMEOUT=300 run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        fail "R2 listing SIGKILL timeout was treated as success"
+    fi
+    grep -q "R2 backup enumeration failed: timed out after 300s" <<< "$output" || fail "R2 listing SIGKILL timeout was not reported: $output"
+    pass "R2 listing SIGKILL timeouts are reported"
+}
+
 test_r2_purge_failure_is_reported() {
     local backup_dir rclone_dir purge_log i r2_listing output
     backup_dir="$TMP_DIR/r2-purge-fail"
@@ -243,6 +261,7 @@ test_multiple_backups_prune_oldest
 test_safety_buffer_boundary_skips_prune
 test_r2_listing_failure_is_reported
 test_r2_listing_timeout_is_reported
+test_r2_listing_sigkill_timeout_is_reported
 test_r2_purge_failure_is_reported
 test_local_enumeration_failure_is_reported
 test_local_permission_failure_is_reported
