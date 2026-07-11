@@ -111,6 +111,38 @@ test_empty_backup_sets_skip_cleanly() {
     pass "empty local and R2 backup sets skip cleanly"
 }
 
+test_environment_overrides_config_env() {
+    local deploy_dir backup_dir rclone_dir purge_log
+    deploy_dir="$TMP_DIR/config deploy"
+    backup_dir="$TMP_DIR/config override local"
+    rclone_dir="$TMP_DIR/rclone bin config override"
+    purge_log="$TMP_DIR/config-override-purge.log"
+    mkdir -p "$deploy_dir/scripts" "$backup_dir"
+    cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$deploy_dir/scripts/"
+    cp "$ROOT_DIR/scripts/allium-deploy-prune.sh" "$deploy_dir/scripts/"
+    make_rclone_stub "$rclone_dir"
+    cat > "$deploy_dir/config.env" <<CONFIG
+BACKUP_DIR="$TMP_DIR/config local should not be used"
+R2_BUCKET=config-bucket
+RCLONE_PATH=/bin/false
+KEEP_BACKUPS=1
+R2_LIST_TIMEOUT=1
+CONFIG
+
+    BACKUP_DIR="$backup_dir" \
+    KEEP_BACKUPS=5 \
+    R2_BUCKET=test-bucket \
+    RCLONE_PATH="$rclone_dir/rclone" \
+    R2_LIST_TIMEOUT=300 \
+    RCLONE_PURGE_LOG="$purge_log" \
+    RCLONE_LSF_OUTPUT="" \
+    "$deploy_dir/scripts/allium-deploy-prune.sh" >/dev/null
+
+    [[ -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "config override backup dir changed"
+    [[ ! -s "$purge_log" ]] || fail "config override triggered purge"
+    pass "environment overrides config.env"
+}
+
 test_multiple_backups_prune_oldest() {
     local backup_dir rclone_dir purge_log i name r2_listing remaining purged expected_purges
     backup_dir="$TMP_DIR/multi local"
@@ -289,6 +321,7 @@ test_local_permission_failure_is_reported() {
 }
 
 test_empty_backup_sets_skip_cleanly
+test_environment_overrides_config_env
 test_multiple_backups_prune_oldest
 test_safety_buffer_boundary_skips_prune
 test_r2_listing_failure_is_reported
