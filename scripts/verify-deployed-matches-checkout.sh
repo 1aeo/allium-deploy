@@ -22,10 +22,13 @@ log() {
 }
 
 run_wrangler() {
-    if command -v wrangler >/dev/null 2>&1; then
+    if [[ -x "$DEPLOY_DIR/node_modules/.bin/wrangler" ]]; then
+        "$DEPLOY_DIR/node_modules/.bin/wrangler" "$@"
+    elif command -v wrangler >/dev/null 2>&1; then
         wrangler "$@"
     else
-        npx --yes wrangler "$@"
+        log "wrangler is required; run pnpm install --frozen-lockfile first"
+        return 127
     fi
 }
 

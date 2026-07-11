@@ -5,20 +5,33 @@ on:
     - cron: '17 9 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   verify-deployed:
     name: Verify Deployed Bundle
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install verifier dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Verify deployed Pages commit
         env:
