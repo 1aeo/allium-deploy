@@ -26,3 +26,13 @@ jobs:
       - name: Check Bash scripts
         run: |
           find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: ShellCheck deploy scripts
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck -x -e SC1091,SC2015,SC2295,SC2317 \
+            scripts/allium-deploy-update.sh \
+            scripts/verify-deployed-matches-checkout.sh

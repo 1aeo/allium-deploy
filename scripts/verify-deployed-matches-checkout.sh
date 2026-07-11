@@ -6,6 +6,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=./scripts/allium-deploy-lib.sh
+source "$SCRIPT_DIR/allium-deploy-lib.sh"
+
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
     # shellcheck disable=SC1091
     source "$DEPLOY_DIR/config.env"
@@ -58,7 +61,10 @@ sha_matches() {
 }
 
 log "Fetching $REMOTE $BRANCH..."
-git fetch --quiet "$REMOTE" "$BRANCH"
+if ! run_with_timeout 30 git fetch --quiet "$REMOTE" "$BRANCH"; then
+    log "Could not fetch $REMOTE $BRANCH"
+    exit 1
+fi
 
 LOCAL_HEAD="$(git rev-parse HEAD)"
 REMOTE_HEAD="$(git rev-parse "$REMOTE/$BRANCH")"
@@ -80,28 +86,35 @@ DEPLOYED_SHA="$(printf '%s' "$DEPLOYMENTS_JSON" | jq -r '
       elif .deployments then .deployments
       else []
       end;
+    def normalized($value):
+      ($value // "" | tostring | ascii_downcase);
     def deployment_branch($d):
-      $d.deployment_trigger.metadata.branch?
+      $d.Branch?
+      // $d.deployment_trigger.metadata.branch?
       // $d.source.config.branch?
       // $d.branch?
       // null;
     def deployment_environment($d):
-      $d.environment?
+      $d.Environment?
+      // $d.environment?
       // $d.deployment_trigger.metadata.environment?
       // $d.source.config.environment?
       // null;
+    def deployment_source($d):
+      $d.Source?
+      // $d.deployment_trigger.metadata.commit_hash?
+      // $d.deployment_trigger.metadata.commitHash?
+      // $d.source.config.commit_hash?
+      // $d.source.config.commitHash?
+      // $d.commit_hash?
+      // $d.commitHash?
+      // empty;
     (deployments
      | map(select(
-         deployment_branch(.) == "production"
-         or deployment_environment(.) == "production"))
+         normalized(deployment_branch(.)) == "production"
+         or normalized(deployment_environment(.)) == "production"))
      | .[0] // empty) as $d
-    | ($d.deployment_trigger.metadata.commit_hash
-       // $d.deployment_trigger.metadata.commitHash
-       // $d.source.config.commit_hash
-       // $d.source.config.commitHash
-       // $d.commit_hash
-       // $d.commitHash
-       // empty)
+    | deployment_source($d)
 ')"
 
 if [[ -z "$DEPLOYED_SHA" ]]; then
