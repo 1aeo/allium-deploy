@@ -61,6 +61,19 @@ STUB
     chmod +x "$bin_dir/ls"
 }
 
+make_timeout_stub() {
+    local bin_dir="$1"
+    mkdir -p "$bin_dir"
+    cat > "$bin_dir/timeout" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+
+sleep "${TIMEOUT_STUB_SLEEP:-0}"
+exit "${TIMEOUT_STUB_EXIT:-0}"
+STUB
+    chmod +x "$bin_dir/timeout"
+}
+
 run_prune() {
     local backup_dir="$1"
     local rclone_path="$2"
@@ -78,6 +91,8 @@ run_prune() {
     RCLONE_LSF_EXIT="${RCLONE_LSF_EXIT:-}" \
     RCLONE_LSF_SLEEP="${RCLONE_LSF_SLEEP:-}" \
     RCLONE_PURGE_ERROR="${RCLONE_PURGE_ERROR:-}" \
+    TIMEOUT_STUB_EXIT="${TIMEOUT_STUB_EXIT:-}" \
+    TIMEOUT_STUB_SLEEP="${TIMEOUT_STUB_SLEEP:-}" \
         "$ROOT_DIR/scripts/allium-deploy-prune.sh"
 }
 
@@ -180,18 +195,35 @@ test_r2_listing_timeout_is_reported() {
 }
 
 test_r2_listing_sigkill_timeout_is_reported() {
-    local backup_dir rclone_dir purge_log output
+    local backup_dir rclone_dir timeout_dir purge_log output
     backup_dir="$TMP_DIR/r2-lsf-sigkill-timeout"
     rclone_dir="$TMP_DIR/rclone bin r2 lsf sigkill timeout"
+    timeout_dir="$TMP_DIR/timeout bin r2 lsf sigkill timeout"
     purge_log="$TMP_DIR/r2-lsf-sigkill-timeout-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+    make_timeout_stub "$timeout_dir"
+
+    if output=$(PATH="$timeout_dir:$PATH" TIMEOUT_STUB_EXIT=137 TIMEOUT_STUB_SLEEP=2 R2_LIST_TIMEOUT=1 run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        fail "R2 listing SIGKILL timeout was treated as success"
+    fi
+    grep -q "R2 backup enumeration failed: timed out after 1s" <<< "$output" || fail "R2 listing SIGKILL timeout was not reported: $output"
+    pass "R2 listing SIGKILL timeouts are reported"
+}
+
+test_r2_listing_sigkill_failure_is_reported() {
+    local backup_dir rclone_dir purge_log output
+    backup_dir="$TMP_DIR/r2-lsf-sigkill-fail"
+    rclone_dir="$TMP_DIR/rclone bin r2 lsf sigkill fail"
+    purge_log="$TMP_DIR/r2-lsf-sigkill-fail-purge.log"
     mkdir -p "$backup_dir"
     make_rclone_stub "$rclone_dir"
 
     if output=$(RCLONE_LSF_EXIT=137 R2_LIST_TIMEOUT=300 run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
-        fail "R2 listing SIGKILL timeout was treated as success"
+        fail "R2 listing SIGKILL failure was treated as success"
     fi
-    grep -q "R2 backup enumeration failed: timed out after 300s" <<< "$output" || fail "R2 listing SIGKILL timeout was not reported: $output"
-    pass "R2 listing SIGKILL timeouts are reported"
+    grep -q "R2 backup enumeration failed: exit status 137" <<< "$output" || fail "R2 listing SIGKILL failure was not reported: $output"
+    pass "R2 listing SIGKILL failures are reported"
 }
 
 test_r2_purge_failure_is_reported() {
@@ -262,6 +294,7 @@ test_safety_buffer_boundary_skips_prune
 test_r2_listing_failure_is_reported
 test_r2_listing_timeout_is_reported
 test_r2_listing_sigkill_timeout_is_reported
+test_r2_listing_sigkill_failure_is_reported
 test_r2_purge_failure_is_reported
 test_local_enumeration_failure_is_reported
 test_local_permission_failure_is_reported

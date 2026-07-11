@@ -72,10 +72,12 @@ else
     r2_status=$?
     r2_error=$(cat "$r2_error_file" 2>/dev/null || true)
     rm -f "$r2_error_file"
-    if [[ "$r2_status" -eq 124 || "$r2_status" -eq 137 ]]; then
+    if [[ "$r2_status" -eq 124 ]]; then
         log "❌ R2 backup enumeration failed: timed out after ${R2_LIST_TIMEOUT}s"
+    elif [[ -n "$r2_error" ]]; then
+        log "❌ R2 backup enumeration failed: $r2_error"
     else
-        log "❌ R2 backup enumeration failed: ${r2_error:-unknown error}"
+        log "❌ R2 backup enumeration failed: exit status $r2_status"
     fi
     exit 1
 fi
