@@ -45,6 +45,17 @@ STUB
     chmod +x "$bin_dir/rclone"
 }
 
+make_ls_failure_stub() {
+    local bin_dir="$1"
+    mkdir -p "$bin_dir"
+    cat > "$bin_dir/ls" <<'STUB'
+#!/usr/bin/env bash
+echo "forced ls failure" >&2
+exit 2
+STUB
+    chmod +x "$bin_dir/ls"
+}
+
 run_prune() {
     local backup_dir="$1"
     local rclone_path="$2"
@@ -167,19 +178,18 @@ test_r2_purge_failure_is_reported() {
 }
 
 test_local_enumeration_failure_is_reported() {
-    local backup_dir rclone_dir purge_log output
+    local backup_dir ls_dir rclone_dir purge_log output
     backup_dir="$TMP_DIR/local-enum-fail"
+    ls_dir="$TMP_DIR/ls fail bin"
     rclone_dir="$TMP_DIR/rclone bin local enum fail"
     purge_log="$TMP_DIR/local-enum-fail-purge.log"
-    mkdir -p "$backup_dir"
+    mkdir -p "$backup_dir/backup-01"
+    make_ls_failure_stub "$ls_dir"
     make_rclone_stub "$rclone_dir"
-    chmod 000 "$backup_dir"
 
-    if output=$(run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
-        chmod 700 "$backup_dir"
+    if output=$(PATH="$ls_dir:$PATH" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
         fail "local enumeration failure was treated as success"
     fi
-    chmod 700 "$backup_dir"
     grep -q "Local backup enumeration failed" <<< "$output" || fail "local enumeration failure was not reported: $output"
     pass "local enumeration failures are reported"
 }

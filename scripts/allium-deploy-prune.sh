@@ -61,10 +61,14 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
 fi
 
 # R2 prune
-if ! r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>&1); then
-    log "❌ R2 backup enumeration failed: $r2_all"
+r2_error_file=$(mktemp)
+if ! r2_all=$("$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>"$r2_error_file"); then
+    r2_error=$(cat "$r2_error_file" 2>/dev/null || true)
+    rm -f "$r2_error_file"
+    log "❌ R2 backup enumeration failed: ${r2_error:-unknown error}"
     exit 1
 fi
+rm -f "$r2_error_file"
 r2_count=$(count_lines "$r2_all")
 if [[ "$r2_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
     r2_purge_failed=false
