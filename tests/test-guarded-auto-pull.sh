@@ -19,25 +19,53 @@ pass() {
     echo "ok - $1"
 }
 
-make_gh_stub() {
+make_curl_stub() {
     local bin_dir="$1"
     mkdir -p "$bin_dir"
-    cat > "$bin_dir/gh" <<'STUB'
+    cat > "$bin_dir/curl" <<'STUB'
 #!/usr/bin/env bash
-for arg in "$@"; do
-    case "$arg" in
-        auth)
-            exit "${GH_AUTH_EXIT:-0}"
+header_file=""
+url=""
+
+while (($#)); do
+    case "$1" in
+        -D)
+            header_file="$2"
+            shift 2
             ;;
-        api)
-            printf '%s\n' "${GH_CHECKS_PAYLOAD:?GH_CHECKS_PAYLOAD must be set}"
-            exit 0
+        -H|--header|--connect-timeout|--max-time)
+            shift 2
+            ;;
+        -*)
+            shift
+            ;;
+        *)
+            url="$1"
+            shift
             ;;
     esac
 done
-exit 1
+
+if [[ "${CURL_EXIT:-0}" != "0" ]]; then
+    exit "$CURL_EXIT"
+fi
+
+if [[ "${CURL_PAGINATED:-}" == "1" ]]; then
+    if [[ "$url" == *"page=2"* ]]; then
+        [[ -n "$header_file" ]] && : > "$header_file"
+        printf '%s\n' "${CURL_CHECKS_PAYLOAD_PAGE2:?CURL_CHECKS_PAYLOAD_PAGE2 must be set}"
+    else
+        if [[ -n "$header_file" ]]; then
+            printf 'link: <https://api.github.com/page2?page=2>; rel="next"\r\n' > "$header_file"
+        fi
+        printf '%s\n' "${CURL_CHECKS_PAYLOAD_PAGE1:?CURL_CHECKS_PAYLOAD_PAGE1 must be set}"
+    fi
+else
+    [[ -n "$header_file" ]] && : > "$header_file"
+    printf '%s\n' "${CURL_CHECKS_PAYLOAD:?CURL_CHECKS_PAYLOAD must be set}"
+fi
 STUB
-    chmod +x "$bin_dir/gh"
+    chmod +x "$bin_dir/curl"
 }
 
 source_update_script() {
@@ -114,9 +142,9 @@ prepare_guarded_pull_test() {
     local checks_payload="$2"
 
     export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    unset GH_AUTH_EXIT
-    export GH_CHECKS_PAYLOAD="$checks_payload"
+    make_curl_stub "$TMP_DIR/bin"
+    unset CURL_EXIT CURL_PAGINATED CURL_CHECKS_PAYLOAD_PAGE1 CURL_CHECKS_PAYLOAD_PAGE2
+    export CURL_CHECKS_PAYLOAD="$checks_payload"
     # shellcheck disable=SC2034
     ALLIUM_REPO_DIR="$clone"
     unset ALLIUM_ROLLBACK_SHA
@@ -140,18 +168,42 @@ test_green_pull() {
     pass "green check-runs allow fast-forward"
 }
 
-test_auth_failure_skips_check_runs() {
+test_skipped_check_runs_allow_pull() {
+    local parts seed clone old new
+    parts=$(init_repo_pair master skipped)
+    IFS='|' read -r _ seed clone <<< "$parts"
+    old=$(git -C "$clone" rev-parse HEAD)
+    push_remote_commit "$seed" master "skipped"
+    new=$(git -C "$seed" rev-parse HEAD)
+
     export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_AUTH_EXIT=1
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+    make_curl_stub "$TMP_DIR/bin"
+    unset CURL_EXIT CURL_PAGINATED CURL_CHECKS_PAYLOAD_PAGE1 CURL_CHECKS_PAYLOAD_PAGE2
+    export CURL_CHECKS_PAYLOAD='{"total_count":2,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"},{"name":"conditional","status":"completed","conclusion":"skipped"}]}'
+    # shellcheck disable=SC2034
+    ALLIUM_REPO_DIR="$clone"
+    unset ALLIUM_ROLLBACK_SHA
+    source_update_script
+
+    guarded_pull_allium
+
+    [[ "$(git -C "$clone" rev-parse HEAD)" == "$new" ]] || fail "skipped check-runs did not fast-forward"
+    [[ "${ALLIUM_ROLLBACK_SHA:-}" == "$old" ]] || fail "skipped check-runs did not record rollback sha"
+    pass "skipped check-runs allow fast-forward"
+}
+
+test_api_failure_skips_check_runs() {
+    export PATH="$TMP_DIR/bin:$PATH"
+    make_curl_stub "$TMP_DIR/bin"
+    export CURL_EXIT=22
+    export CURL_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
     source_update_script
 
     if check_runs_are_green "1aeo/allium" "deadbeef" "allium"; then
-        fail "unauthenticated gh was accepted"
+        fail "failed GitHub checks API read was accepted"
     fi
-    unset GH_AUTH_EXIT
-    pass "unauthenticated gh skips check-run gate"
+    unset CURL_EXIT
+    pass "GitHub checks API read failures skip check-run gate"
 }
 
 test_no_check_runs_skip_pull() {
@@ -172,11 +224,15 @@ test_no_check_runs_skip_pull() {
 
 test_paginated_check_runs() {
     export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD=$'{"total_count":1,"check_runs":[{"name":"lint","status":"completed","conclusion":"success"}]}\n{"total_count":1,"check_runs":[{"name":"test","status":"completed","conclusion":"success"}]}'
+    make_curl_stub "$TMP_DIR/bin"
+    unset CURL_EXIT CURL_CHECKS_PAYLOAD
+    export CURL_PAGINATED=1
+    export CURL_CHECKS_PAYLOAD_PAGE1='{"total_count":1,"check_runs":[{"name":"lint","status":"completed","conclusion":"success"}]}'
+    export CURL_CHECKS_PAYLOAD_PAGE2='{"total_count":1,"check_runs":[{"name":"test","status":"completed","conclusion":"success"}]}'
     source_update_script
 
     check_runs_are_green "1aeo/allium" "deadbeef" "allium" || fail "paginated check-runs were not accepted"
+    unset CURL_PAGINATED CURL_CHECKS_PAYLOAD_PAGE1 CURL_CHECKS_PAYLOAD_PAGE2
     pass "paginated check-runs are parsed across pages"
 }
 
@@ -280,8 +336,8 @@ test_rollback_both() {
     push_remote_commit "$deploy_seed" main "deploy-next"
 
     export PATH="$TMP_DIR/bin:$PATH"
-    make_gh_stub "$TMP_DIR/bin"
-    export GH_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
+    make_curl_stub "$TMP_DIR/bin"
+    export CURL_CHECKS_PAYLOAD='{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'
     source_update_script
     # shellcheck disable=SC2034
     ALLIUM_REPO_DIR="$allium_clone"
@@ -328,7 +384,8 @@ test_fresh_cfpages_allows_deploy() {
 
 test_allium_path_derivation
 test_green_pull
-test_auth_failure_skips_check_runs
+test_skipped_check_runs_allow_pull
+test_api_failure_skips_check_runs
 test_no_check_runs_skip_pull
 test_paginated_check_runs
 test_not_green_skip

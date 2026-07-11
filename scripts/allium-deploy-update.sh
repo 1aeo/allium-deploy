@@ -88,14 +88,56 @@ reset_failures() {
     echo 0 > "$CONSECUTIVE_FAILURES_FILE"
 }
 
+fetch_check_runs() {
+    local repo="$1"
+    local sha="$2"
+    local url="https://api.github.com/repos/$repo/commits/$sha/check-runs?per_page=100"
+    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    local header_file page next_url
+
+    while [[ -n "$url" ]]; do
+        header_file=$(mktemp)
+        if [[ -n "$token" ]]; then
+            if ! page=$(run_with_timeout 30 curl -fsSL -D "$header_file" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Authorization: Bearer $token" \
+                "$url"); then
+                rm -f "$header_file"
+                return 1
+            fi
+        else
+            if ! page=$(run_with_timeout 30 curl -fsSL -D "$header_file" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$url"); then
+                rm -f "$header_file"
+                return 1
+            fi
+        fi
+
+        printf '%s\n' "$page"
+        next_url=$(awk -F'[<>]' 'tolower($0) ~ /^link:/ {
+            for (i = 2; i <= NF; i += 2) {
+                if ($(i + 1) ~ /rel="next"/) {
+                    print $i
+                    exit
+                }
+            }
+        }' "$header_file")
+        rm -f "$header_file"
+        url="$next_url"
+    done
+}
+
 check_runs_are_green() {
     local repo="$1"
     local sha="$2"
     local label="$3"
     local payload total failing summary
 
-    if ! command -v gh &>/dev/null; then
-        log "Guarded auto-pull skipped for $label: gh is not installed"
+    if ! command -v curl &>/dev/null; then
+        log "Guarded auto-pull skipped for $label: curl is not installed"
         return 1
     fi
 
@@ -104,12 +146,7 @@ check_runs_are_green() {
         return 1
     fi
 
-    if ! run_with_timeout 30 gh auth status -h github.com &>/dev/null; then
-        log "Guarded auto-pull skipped for $label: gh is not authenticated"
-        return 1
-    fi
-
-    if ! payload=$(run_with_timeout 30 gh api --paginate -H "Accept: application/vnd.github+json" "/repos/$repo/commits/$sha/check-runs?per_page=100" 2>/dev/null); then
+    if ! payload=$(fetch_check_runs "$repo" "$sha" 2>/dev/null); then
         log "Guarded auto-pull skipped for $label@$sha: could not read GitHub check-runs"
         return 1
     fi
@@ -120,17 +157,17 @@ check_runs_are_green() {
         return 1
     fi
 
-    failing=$(jq -s -r '[.[].check_runs[] | select(.status != "completed" or .conclusion != "success")] | length' <<< "$payload" 2>/dev/null || echo 1)
+    failing=$(jq -s -r '[.[].check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped"))] | length' <<< "$payload" 2>/dev/null || echo 1)
     if (( failing == 0 )); then
         return 0
     fi
 
     summary=$(jq -s -r '[
         .[].check_runs[]
-        | select(.status != "completed" or .conclusion != "success")
+        | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped"))
         | "\(.name):\(.status)/\(.conclusion // "null")"
     ] | join(";")' <<< "$payload" 2>/dev/null || true)
-    log "Guarded auto-pull skipped for $label@$sha: checks not all success (${summary:-unknown})"
+    log "Guarded auto-pull skipped for $label@$sha: checks not all success or skipped (${summary:-unknown})"
     return 1
 }
 
