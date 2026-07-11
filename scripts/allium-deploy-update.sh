@@ -49,11 +49,16 @@ require_current_deploy_checkout() {
     log "Verifying allium-deploy checkout before schema-triggered deploy..."
 
     cd "$DEPLOY_DIR"
-    git fetch --quiet origin main
+    if ! run_with_timeout 30 git fetch --quiet origin main; then
+        log "refusing schema-triggered deploy: could not fetch origin/main"
+        return 1
+    fi
 
     local local_head origin_head dirty
-    local_head="$(git rev-parse HEAD)"
-    origin_head="$(git rev-parse origin/main)"
+    if ! local_head="$(git rev-parse HEAD)" || ! origin_head="$(git rev-parse origin/main)"; then
+        log "refusing schema-triggered deploy: could not resolve checkout or origin/main"
+        return 1
+    fi
 
     if [[ "$local_head" != "$origin_head" ]]; then
         log "refusing schema-triggered deploy: checkout HEAD $local_head is not origin/main $origin_head"

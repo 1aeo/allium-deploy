@@ -77,14 +77,21 @@ DEPLOYED_SHA="$(printf '%s' "$DEPLOYMENTS_JSON" | jq -r '
       elif .deployments then .deployments
       else []
       end;
+    def deployment_branch($d):
+      $d.deployment_trigger.metadata.branch?
+      // $d.source.config.branch?
+      // $d.branch?
+      // null;
+    def deployment_environment($d):
+      $d.environment?
+      // $d.deployment_trigger.metadata.environment?
+      // $d.source.config.environment?
+      // null;
     (deployments
      | map(select(
-         (.deployment_trigger.metadata.branch
-          // .source.config.branch
-          // .branch
-          // .environment
-          // "production") == "production"))
-     | (.[0] // deployments[0] // {})) as $d
+         deployment_branch(.) == "production"
+         or deployment_environment(.) == "production"))
+     | .[0] // empty) as $d
     | ($d.deployment_trigger.metadata.commit_hash
        // $d.deployment_trigger.metadata.commitHash
        // $d.source.config.commit_hash
