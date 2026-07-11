@@ -1,5 +1,31 @@
 #!/usr/bin/env bash
 
+capture_env_overrides() {
+    local name set_var value_var
+    for name in "$@"; do
+        set_var="ENV_OVERRIDE_${name}_SET"
+        value_var="ENV_OVERRIDE_${name}_VALUE"
+        if [[ "${!name+x}" == "x" ]]; then
+            printf -v "$set_var" '%s' "1"
+            printf -v "$value_var" '%s' "${!name-}"
+        else
+            printf -v "$set_var" '%s' ""
+            printf -v "$value_var" '%s' ""
+        fi
+    done
+}
+
+restore_env_overrides() {
+    local name set_var value_var
+    for name in "$@"; do
+        set_var="ENV_OVERRIDE_${name}_SET"
+        value_var="ENV_OVERRIDE_${name}_VALUE"
+        if [[ -n "${!set_var:-}" ]]; then
+            printf -v "$name" '%s' "${!value_var-}"
+        fi
+    done
+}
+
 run_with_timeout() {
     local seconds="$1"
     shift
