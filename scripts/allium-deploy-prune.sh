@@ -18,6 +18,7 @@ fi
 LOCAL_BACKUP_DIR="${BACKUP_DIR:-$HOME/metrics-backups}"
 BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
+R2_LIST_TIMEOUT="${R2_LIST_TIMEOUT:-300}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 SAFETY_BUFFER=2
 
@@ -65,13 +66,19 @@ fi
 
 # R2 prune
 r2_error_file=$(mktemp)
-if ! r2_all=$(run_with_timeout 300 "$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>"$r2_error_file"); then
+if r2_all=$(run_with_timeout "$R2_LIST_TIMEOUT" "$RCLONE" lsf "$BUCKET/_backups/" --dirs-only 2>"$r2_error_file"); then
+    rm -f "$r2_error_file"
+else
+    r2_status=$?
     r2_error=$(cat "$r2_error_file" 2>/dev/null || true)
     rm -f "$r2_error_file"
-    log "❌ R2 backup enumeration failed: ${r2_error:-unknown error}"
+    if [[ "$r2_status" -eq 124 ]]; then
+        log "❌ R2 backup enumeration failed: timed out after ${R2_LIST_TIMEOUT}s"
+    else
+        log "❌ R2 backup enumeration failed: ${r2_error:-unknown error}"
+    fi
     exit 1
 fi
-rm -f "$r2_error_file"
 r2_count=$(count_lines "$r2_all")
 if [[ "$r2_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
     r2_purge_failed=false
