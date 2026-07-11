@@ -112,17 +112,22 @@ test_empty_backup_sets_skip_cleanly() {
 }
 
 test_environment_overrides_config_env() {
-    local deploy_dir backup_dir rclone_dir purge_log
+    local deploy_dir backup_dir config_backup_dir rclone_dir purge_log config_remaining i
     deploy_dir="$TMP_DIR/config deploy"
     backup_dir="$TMP_DIR/config override local"
+    config_backup_dir="$TMP_DIR/config local should not be used"
     rclone_dir="$TMP_DIR/rclone bin config override"
     purge_log="$TMP_DIR/config-override-purge.log"
-    mkdir -p "$deploy_dir/scripts" "$backup_dir"
+    mkdir -p "$deploy_dir/scripts" "$backup_dir" "$config_backup_dir"
     cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$deploy_dir/scripts/"
     cp "$ROOT_DIR/scripts/allium-deploy-prune.sh" "$deploy_dir/scripts/"
     make_rclone_stub "$rclone_dir"
+    for i in 1 2 3 4 5 6 7 8; do
+        mkdir -p "$config_backup_dir/backup-config-0$i"
+        touch -t "20260101010$i" "$config_backup_dir/backup-config-0$i"
+    done
     cat > "$deploy_dir/config.env" <<CONFIG
-BACKUP_DIR="$TMP_DIR/config local should not be used"
+BACKUP_DIR="$config_backup_dir"
 R2_BUCKET=config-bucket
 RCLONE_PATH=/bin/false
 KEEP_BACKUPS=1
@@ -139,6 +144,8 @@ CONFIG
     "$deploy_dir/scripts/allium-deploy-prune.sh" >/dev/null
 
     [[ -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "config override backup dir changed"
+    config_remaining=$(find "$config_backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | wc -l | tr -d ' ')
+    [[ "$config_remaining" == "8" ]] || fail "config backup dir was pruned via config.env: $config_remaining remain"
     [[ ! -s "$purge_log" ]] || fail "config override triggered purge"
     pass "environment overrides config.env"
 }
