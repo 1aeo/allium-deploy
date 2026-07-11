@@ -33,6 +33,5 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y shellcheck
           fi
-          shellcheck -x -e SC1091,SC2015,SC2295,SC2317 \
-            scripts/allium-deploy-update.sh \
-            scripts/verify-deployed-matches-checkout.sh
+          find scripts -name '*.sh' -print0 |
+            xargs -0 shellcheck -x -e SC1091,SC2012,SC2034,SC2086,SC2295,SC2317,SC2015
