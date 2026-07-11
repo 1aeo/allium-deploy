@@ -90,6 +90,24 @@ test_allium_path_derivation() {
     pass "allium path derivation supports repo root and generator dir"
 }
 
+test_test_mode_ignores_config_env() {
+    local deploy_dir script_dir repo_root actual
+    deploy_dir="$TMP_DIR/config-deploy"
+    script_dir="$deploy_dir/scripts"
+    repo_root="$TMP_DIR/config-path-repo"
+
+    mkdir -p "$script_dir" "$repo_root/allium"
+    cp "$ROOT_DIR/scripts/allium-deploy-update.sh" "$script_dir/allium-deploy-update.sh"
+    cp "$ROOT_DIR/scripts/allium-deploy-lib.sh" "$script_dir/allium-deploy-lib.sh"
+    printf 'ALLIUM_DIR=/tmp/config-env-should-not-win\n' > "$deploy_dir/config.env"
+    touch "$repo_root/allium/allium.py"
+
+    actual=$(ALLIUM_DEPLOY_TEST_MODE=1 ALLIUM_DIR="$repo_root" bash -c 'source "$1"; printf "%s|%s\n" "$ALLIUM_REPO_DIR" "$ALLIUM_DIR"' _ "$script_dir/allium-deploy-update.sh")
+    [[ "$actual" == "$repo_root|$repo_root/allium" ]] || fail "test mode sourced config.env unexpectedly: $actual"
+
+    pass "test mode ignores deployed config.env"
+}
+
 init_repo_pair() {
     local branch="$1"
     local name="$2"
@@ -383,6 +401,7 @@ test_fresh_cfpages_allows_deploy() {
 }
 
 test_allium_path_derivation
+test_test_mode_ignores_config_env
 test_green_pull
 test_skipped_check_runs_allow_pull
 test_api_failure_skips_check_runs
