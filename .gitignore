@@ -33,3 +33,6 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+# Cloudflare Wrangler build/deploy cache (regenerated on every 'wrangler pages deploy')
+.wrangler/
