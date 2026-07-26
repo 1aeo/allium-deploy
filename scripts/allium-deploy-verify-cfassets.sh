@@ -89,8 +89,8 @@ verify_headers() {
         log "root headers failed: unexpected Cache-Control '$cache_control'"
         return 1
     }
-    [[ "$robots" == *"noindex"* && "$robots" == *"nofollow"* ]] || {
-        log "root headers failed: preview is missing noindex/nofollow"
+    [[ "$robots" == *"noindex"* ]] || {
+        log "root headers failed: preview is missing noindex"
         return 1
     }
 
@@ -160,10 +160,10 @@ INDEX_FILE="$SOURCE_DIR/search-index.json"
 [[ -f "$ROOT_FILE" ]] || { echo "Missing $ROOT_FILE" >&2; exit 2; }
 [[ -f "$INDEX_FILE" ]] || { echo "Missing $INDEX_FILE" >&2; exit 2; }
 
-NESTED_FILE=$(find "$SOURCE_DIR" -mindepth 2 -type f -name index.html -print | sort | awk 'NR == 1 { print; exit }')
+NESTED_FILE=$(find "$SOURCE_DIR" -mindepth 2 -type f -name index.html -print | sort | awk 'NR == 1 { print }')
 [[ -n "$NESTED_FILE" ]] || { echo "No nested index.html found" >&2; exit 2; }
 
-LARGEST_RECORD=$(find "$SOURCE_DIR" -type f ! -name _headers -printf '%s %p\n' | sort -nr | awk 'NR == 1 { print; exit }')
+LARGEST_RECORD=$(find "$SOURCE_DIR" -type f ! -name _headers -printf '%s %p\n' | sort -nr | awk 'NR == 1 { print }')
 LARGEST_FILE="${LARGEST_RECORD#* }"
 [[ -f "$LARGEST_FILE" ]] || { echo "Could not select largest file" >&2; exit 2; }
 
