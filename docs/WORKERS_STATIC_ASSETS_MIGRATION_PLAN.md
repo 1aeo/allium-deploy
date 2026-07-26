@@ -1,6 +1,7 @@
 # Allium Workers Static Assets Migration Plan
 
-**Status:** Approved plan; required staging experiments complete; Stage 1 is next
+**Status:** Approved plan; Stages 1–2 execution is in progress; Stage 3 remains
+blocked on review
 
 **Approved:** 2026-07-26
 
@@ -11,6 +12,10 @@
 **Production checkout:** `/home/aeo1/allium-deploy` on `hostedopen`
 
 **Generator checkout:** `/home/aeo1/allium`
+
+Stage 1–2 measurements, safety findings, soak counters, and route-rehearsal
+evidence are tracked in
+[`WORKERS_STATIC_ASSETS_STAGE1_STAGE2_EXECUTION.md`](WORKERS_STATIC_ASSETS_STAGE1_STAGE2_EXECUTION.md).
 
 ## Decisions that apply to every stage
 
@@ -61,7 +66,12 @@ The existing Pages files remain active until the cleanup stage:
 - `wrangler.toml.template`
 - `purge_cdn()` in `scripts/allium-deploy-update.sh`
 
-The current `package.json` pins Wrangler `4.110.0`, which is above Cloudflare's minimum Wrangler version for the Paid 100,000-static-asset limit.
+The implementation pins Wrangler `4.86.0` and pnpm `10.34.5`, which are
+compatible with `hostedopen`'s Node.js 20 runtime and remain above
+Cloudflare's minimum versions for Workers Assets, Preview URLs, and the Paid
+100,000-static-asset limit. Wrangler `4.110.0` and pnpm 11 were rejected during
+the host test because their toolchain requires Node.js 22; the host is not
+being upgraded as an incidental part of this migration.
 
 ## Completed prerequisite experiment and measured evidence
 
@@ -161,6 +171,16 @@ The Workers job runs:
 `wrangler versions upload --preview-alias allium-candidate`
 
 It must not run `wrangler deploy`, `wrangler versions deploy`, attach a production route, attach a production custom domain, or modify production DNS during this stage.
+
+Implementation finding: a brand-new Worker with uploaded versions but no
+deployment record returned Cloudflare error 1042 when its preview accessed the
+Assets binding. A one-time bootstrap deployment was therefore required on the
+dedicated route-free `1aeo-metrics-assets-stage2.workers.dev` service before
+scheduled shadow publishing began. This bootstrap did not attach a zone route,
+custom domain, production DNS record, or `metrics.1aeo.com` traffic. It is a
+service-initialization prerequisite, not candidate promotion; normal scheduled
+Stage 1–2 runs continue to obey the prohibition above and use only
+`wrangler versions upload` plus preview verification.
 
 ### Stage 1 configuration
 

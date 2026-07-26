@@ -39,6 +39,20 @@ grep -q 'X-Robots-Tag: noindex, nofollow' "$TMP_DIR/output/_headers" || fail "pr
 grep -q 'The requested Allium metrics page does not exist' "$TMP_DIR/output/404.html" || fail "custom 404 installed"
 pass "route-free shadow config and headers are generated"
 
+touch "$TMP_DIR/overlay-preparation-marker"
+sleep 1
+CF_ASSETS_REQUIRE_FRESH_CHECKOUT=false \
+CF_ASSETS_WORKER_NAME=allium-shadow-test \
+CF_ASSETS_PREVIEW_ALIAS=allium-test \
+CF_ASSETS_CONFIG="$TMP_DIR/wrangler.assets.toml" \
+OUTPUT_DIR="$TMP_DIR/output" \
+    "$REPO_DIR/scripts/allium-deploy-cfassets.sh" --generate-only >/dev/null
+[[ ! "$TMP_DIR/output/_headers" -nt "$TMP_DIR/overlay-preparation-marker" ]] || \
+    fail "unchanged headers overlay was rewritten"
+[[ ! "$TMP_DIR/output/404.html" -nt "$TMP_DIR/overlay-preparation-marker" ]] || \
+    fail "unchanged 404 overlay was rewritten"
+pass "repeated overlay preparation is idempotent"
+
 mkdir -p "$TMP_DIR/explicit-output"
 printf '<html>explicit root</html>\n' > "$TMP_DIR/explicit-output/index.html"
 printf '{"meta":{"version":"1.6"},"relays":[]}\n' > "$TMP_DIR/explicit-output/search-index.json"

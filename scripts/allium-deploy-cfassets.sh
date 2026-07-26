@@ -85,8 +85,12 @@ generate_config() {
     [[ -f "$CF_ASSETS_HEADERS_SOURCE" ]] || { log "missing headers source: $CF_ASSETS_HEADERS_SOURCE"; return 1; }
     [[ -f "$CF_ASSETS_404_SOURCE" ]] || { log "missing 404 source: $CF_ASSETS_404_SOURCE"; return 1; }
 
-    install -m 0644 "$CF_ASSETS_HEADERS_SOURCE" "$CF_ASSETS_DIRECTORY/_headers"
-    install -m 0644 "$CF_ASSETS_404_SOURCE" "$CF_ASSETS_DIRECTORY/404.html"
+    if ! cmp -s "$CF_ASSETS_HEADERS_SOURCE" "$CF_ASSETS_DIRECTORY/_headers"; then
+        install -m 0644 "$CF_ASSETS_HEADERS_SOURCE" "$CF_ASSETS_DIRECTORY/_headers"
+    fi
+    if ! cmp -s "$CF_ASSETS_404_SOURCE" "$CF_ASSETS_DIRECTORY/404.html"; then
+        install -m 0644 "$CF_ASSETS_404_SOURCE" "$CF_ASSETS_DIRECTORY/404.html"
+    fi
 
     worker_name=$(escape_sed_replacement "$CF_ASSETS_WORKER_NAME")
     compatibility_date=$(escape_sed_replacement "$CF_ASSETS_COMPATIBILITY_DATE")

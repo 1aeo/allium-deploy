@@ -428,10 +428,24 @@ if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
     fi
 fi
 
-# Step 2: Upload to storage backends and the route-free Workers shadow (parallel)
+# Step 2: Prepare the immutable output overlays before any publisher reads the
+# tree, then upload to storage backends and the route-free Workers shadow in
+# parallel. Repeated Workers preparation is idempotent and preserves mtimes.
 R2_PID=""
 DO_PID=""
 CF_ASSETS_PID=""
+CF_ASSETS_PREPARED=false
+CF_ASSETS_PREPARE_EXIT=0
+
+if [[ "$CF_ASSETS_ENABLED" == "true" ]]; then
+    log "Preparing Cloudflare Workers Assets overlay and route-free config..."
+    if "$SCRIPT_DIR/allium-deploy-cfassets.sh" --generate-only; then
+        CF_ASSETS_PREPARED=true
+    else
+        CF_ASSETS_PREPARE_EXIT=$?
+        log "⚠️ Workers Assets preparation failed (exit $CF_ASSETS_PREPARE_EXIT)"
+    fi
+fi
 
 # Start uploads in parallel (line-buffered for clean interleaving)
 UPLOAD_START=$(date +%s)
@@ -448,7 +462,7 @@ if [[ "$DO_ENABLED" == "true" ]]; then
     DO_PID=$!
 fi
 
-if [[ "$CF_ASSETS_ENABLED" == "true" ]]; then
+if [[ "$CF_ASSETS_PREPARED" == "true" ]]; then
     log "🚀 Starting Cloudflare Workers Assets shadow upload (no production route)..."
     stdbuf -oL "$SCRIPT_DIR/allium-deploy-cfassets.sh" --upload-only &
     CF_ASSETS_PID=$!
@@ -483,7 +497,7 @@ if [[ -n "$DO_PID" ]]; then
     fi
 fi
 
-CF_ASSETS_EXIT=0
+CF_ASSETS_EXIT="$CF_ASSETS_PREPARE_EXIT"
 if [[ -n "$CF_ASSETS_PID" ]]; then
     wait "$CF_ASSETS_PID" || CF_ASSETS_EXIT=$?
     CF_ASSETS_DURATION=$(($(date +%s) - UPLOAD_START))
