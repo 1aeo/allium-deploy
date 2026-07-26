@@ -18,7 +18,7 @@ export default {
     const url = new URL(request.url);
 
     if (!isSearchPath(url.pathname)) {
-      return env.ASSETS.fetch(request);
+      return env.ALLIUM_ASSETS.fetch(request);
     }
 
     return handleSearch({

@@ -11,7 +11,7 @@ workers_dev = true
 
 [assets]
 directory = "{{CF_ASSETS_DIRECTORY}}"
-binding = "ASSETS"
+binding = "ALLIUM_ASSETS"
 not_found_handling = "404-page"
 html_handling = "auto-trailing-slash"
 run_worker_first = [ "/search", "/search/*" ]

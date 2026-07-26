@@ -229,7 +229,10 @@ The Workers search entry point must:
 
 - Handle only `/search` and the exact required search route variants.
 - Reuse the current validation, redirect, escaping, security, and schema-compatibility logic.
-- Read the version-matched `search-index.json` through `env.ASSETS.fetch()` rather than R2 or an external HTTP fetch.
+- Read the version-matched `search-index.json` through the dedicated
+  `env.ALLIUM_ASSETS.fetch()` binding rather than R2 or an external HTTP
+  fetch. The dedicated name must not collide with Pages' built-in `ASSETS`
+  binding while both implementations coexist.
 - Ensure search code and index belong to the same uploaded Worker version.
 - Preserve all current query behavior and redirects.
 - Avoid running Worker code for valid static assets.

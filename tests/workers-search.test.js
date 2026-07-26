@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import worker from '../workers/search.js';
+import { onRequest as handlePagesSearch } from '../functions/search.js?pages-assets-collision-regression';
 
 const fingerprint = 'A'.repeat(40);
 const searchIndex = {
@@ -24,10 +25,40 @@ function executionContext() {
   };
 }
 
-test('Workers search reads the version-matched ASSETS binding', async () => {
+test('Pages built-in ASSETS binding is not mistaken for Allium content', async () => {
+  const originalFetch = globalThis.fetch;
+  let pagesAssetsCalls = 0;
+
+  globalThis.fetch = async (request) => {
+    assert.equal(new URL(request.url).pathname, '/search-index.json');
+    return Response.json(searchIndex);
+  };
+
+  try {
+    const response = await handlePagesSearch({
+      request: new Request(`https://metrics.example/search?q=${fingerprint}`),
+      env: {
+        ASSETS: {
+          async fetch() {
+            pagesAssetsCalls += 1;
+            return new Response('Pages static bundle has no index', { status: 404 });
+          },
+        },
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), `https://metrics.example/relay/${fingerprint}/`);
+    assert.equal(pagesAssetsCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Workers search reads the version-matched ALLIUM_ASSETS binding', async () => {
   const fetched = [];
   const env = {
-    ASSETS: {
+    ALLIUM_ASSETS: {
       async fetch(request) {
         const url = new URL(request.url);
         fetched.push(url.pathname);
@@ -53,7 +84,7 @@ test('Workers search reads the version-matched ASSETS binding', async () => {
 test('non-search Worker invocations delegate to static asset behavior', async () => {
   let delegatedPath = '';
   const env = {
-    ASSETS: {
+    ALLIUM_ASSETS: {
       async fetch(request) {
         delegatedPath = new URL(request.url).pathname;
         return new Response('static 404', { status: 404 });

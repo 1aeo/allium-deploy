@@ -111,6 +111,20 @@ The full tree also exposed SIGPIPE exit 141 in the verifier's `sort | awk`
 first-record selection under `pipefail`. The selector now consumes the full
 stream and has passed against all 29,354 prepared files.
 
+The first Pages telemetry deployment exposed a binding-name collision during
+the immediate production smoke test. Cloudflare Pages provides its own
+`ASSETS` binding for the Pages static bundle. Search incorrectly treated that
+binding as the Worker's version-matched Allium assets and returned
+`INDEX_404`. Root and content delivery remained healthy, but `/search` returned
+503. The last known-good Pages commit was redeployed immediately; three
+consecutive production fingerprint searches then returned the expected 302.
+
+The Worker binding is now named `ALLIUM_ASSETS`. Pages' built-in `ASSETS`
+binding is deliberately ignored, and a regression test supplies a 404 Pages
+binding while requiring search to load the external Pages index successfully.
+Telemetry is redeployed only after this regression and the full production
+search smoke test pass.
+
 ## Stage 2 completion gates
 
 - [ ] Feature branch reviewed, committed, pushed, and fast-forwarded to

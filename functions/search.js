@@ -372,11 +372,11 @@ async function loadIndex(origin, env) {
   let res;
   try {
     const indexRequest = new Request(`${origin}/search-index.json`);
-    if (env?.ASSETS) {
+    if (env?.ALLIUM_ASSETS) {
       // Workers Static Assets: bind search to the index captured in this exact
       // Worker version. This avoids version skew and does not use R2 or an
       // external HTTP origin.
-      res = await env.ASSETS.fetch(indexRequest);
+      res = await env.ALLIUM_ASSETS.fetch(indexRequest);
     } else {
       // Cloudflare Pages compatibility during the migration.
       res = await fetch(indexRequest, {
@@ -702,9 +702,9 @@ function renderError(err, query) {
 // Storage check functions: return true/false if definitive, null if unavailable
 const STORAGE_CHECKERS = {
   async assets(env, path) {
-    if (!env?.ASSETS) return null;
+    if (!env?.ALLIUM_ASSETS) return null;
     try {
-      const res = await env.ASSETS.fetch(new Request(`https://assets.local/${path}`));
+      const res = await env.ALLIUM_ASSETS.fetch(new Request(`https://assets.local/${path}`));
       return res.ok;
     } catch { return null; }
   },
@@ -739,7 +739,7 @@ async function isAroiDomainValidated(idx, env, domain) {
   
   // Fallback: check storage backends in order
   const path = `${domain}/index.html`;
-  const defaultOrder = env?.ASSETS ? 'assets,r2,do' : 'r2,do';
+  const defaultOrder = env?.ALLIUM_ASSETS ? 'assets,r2,do' : 'r2,do';
   const order = (env?.STORAGE_ORDER || defaultOrder).split(',');
   
   for (const backend of order) {

@@ -361,7 +361,7 @@ allium-deploy/          # This deployment repo
 │   ├── [[path]].js     # Pages function (multi-storage + failover)
 │   └── search.js       # Search function (query → redirect)
 ├── workers/
-│   └── search.js       # Workers /search entry point + ASSETS binding
+│   └── search.js       # Workers /search entry point + ALLIUM_ASSETS binding
 ├── scripts/
 │   ├── allium-deploy-install.sh      # One-time setup
 │   ├── allium-deploy-update.sh       # Runs every 30 min via cron
