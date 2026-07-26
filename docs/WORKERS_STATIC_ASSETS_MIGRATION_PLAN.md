@@ -296,6 +296,59 @@ Success requires:
 
 Before production, create a non-production hostname such as `metrics-next.1aeo.com` and rehearse the exact zone-level route, TLS, redirects, WAF behavior, caching, search, and rollback procedure. This hostname remains `noindex, nofollow`.
 
+The rehearsal is intentionally a zone route, not a Worker Custom Domain, so it
+exercises the same routing primitive planned for production without touching
+`metrics.1aeo.com`:
+
+1. Snapshot the existing `metrics.1aeo.com` DNS record, Pages custom-domain
+   state, Workers routes, current production representative hashes, and current
+   Stage 2 Worker deployment.
+2. Re-run the full verifier against the latest immutable preview alias and
+   deploy that exact verified version at 100% only on the dedicated
+   `1aeo-metrics-assets-stage2` Worker. Do not deploy a floating or unverified
+   version and do not change the route-free Wrangler configuration.
+3. Create a temporary proxied `A` record for `metrics-next.1aeo.com` pointing to
+   the reserved originless address `192.0.2.0`. Cloudflare requires a proxied
+   DNS record before a zone route can invoke a Worker. Universal SSL covers
+   this first-level subdomain.
+4. Add only the exact route `metrics-next.1aeo.com/*` targeting the dedicated
+   Stage 2 Worker. Refuse to continue if that hostname already has a different
+   DNS record or route. Never add, edit, or delete a `metrics.1aeo.com` record,
+   route, or Pages custom domain during Stage 2.
+5. Require TLS and three consecutive complete verifier passes for the root,
+   `/index.html`, `search-index.json`, `/1aeo.com/`, the largest generated page,
+   canonical redirects, custom 404, and version-matched server-side search.
+   Exact SHA-256 values must match the verified local output.
+6. Request a static asset twice and verify `ETag`,
+   `Cache-Control: public, max-age=0, must-revalidate`, and Cloudflare's
+   `CF-Cache-Status`. Send a matching `If-None-Match` request and verify
+   revalidation behavior. Do not purge either before or after activation.
+7. Verify security headers, a Cloudflare `CF-Ray`, benign browser traffic, and
+   an AI-crawler user agent all reach the rehearsal site without a WAF block.
+   Verify `X-Robots-Tag: noindex, nofollow` on both static responses and every
+   Worker-generated `/search` response. The production hostname must continue
+   to omit `X-Robots-Tag` so AI and ordinary indexing remain allowed.
+8. Repeat representative checks through `hostedopen` and a second Cloudflare
+   colo. Record only bounded response metadata and hashes; do not enable normal
+   request logging.
+9. Rehearse rollback by deleting the exact temporary route, confirming via the
+   API that it is absent and that the placeholder hostname no longer serves the
+   Worker asset, then deleting only the exact temporary DNS record. Confirm the
+   DNS record is absent, retain the workers.dev preview alias, and re-run the
+   production root and search checks.
+10. Compare the post-rehearsal production DNS, Pages custom-domain, route, and
+    representative-hash snapshot with the pre-rehearsal snapshot. Any
+    difference fails Stage 2 and must be resolved before review.
+
+The temporary credential must have Account / Workers Scripts / Edit plus Zone /
+DNS / Edit, Zone / Workers Routes / Edit, and Zone / Zone / Read, restricted to
+the one account and the `1aeo.com` zone. Cloudflare references:
+
+- [Workers routes](https://developers.cloudflare.com/workers/configuration/routing/routes/)
+- [Workers Routes API](https://developers.cloudflare.com/api/resources/workers/subresources/routes/)
+- [Universal SSL hostname coverage](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/)
+- [Static Asset response headers](https://developers.cloudflare.com/workers/static-assets/headers/)
+
 ### Sparse historical source telemetry
 
 During this stage, add the requested historical evidence to the existing Pages Function:

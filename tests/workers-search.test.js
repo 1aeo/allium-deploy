@@ -81,6 +81,42 @@ test('Workers search reads the version-matched ALLIUM_ASSETS binding', async () 
   assert.deepEqual(fetched, ['/search-index.json']);
 });
 
+test('rehearsal search responses are noindex without affecting production', async () => {
+  const env = {
+    ALLIUM_ASSETS: {
+      async fetch(request) {
+        if (new URL(request.url).pathname === '/search-index.json') {
+          return Response.json(searchIndex);
+        }
+        return new Response('not found', { status: 404 });
+      },
+    },
+  };
+
+  const rehearsal = await worker.fetch(
+    new Request(`https://metrics-next.1aeo.com/search?q=${fingerprint}`),
+    env,
+    executionContext(),
+  );
+  assert.equal(rehearsal.status, 302);
+  assert.equal(rehearsal.headers.get('x-robots-tag'), 'noindex, nofollow');
+
+  const preview = await worker.fetch(
+    new Request(`https://candidate.example.workers.dev/search?q=${fingerprint}`),
+    env,
+    executionContext(),
+  );
+  assert.equal(preview.headers.get('x-robots-tag'), 'noindex, nofollow');
+
+  const production = await worker.fetch(
+    new Request(`https://metrics.1aeo.com/search?q=${fingerprint}`),
+    env,
+    executionContext(),
+  );
+  assert.equal(production.status, 302);
+  assert.equal(production.headers.get('x-robots-tag'), null);
+});
+
 test('non-search Worker invocations delegate to static asset behavior', async () => {
   let delegatedPath = '';
   const env = {

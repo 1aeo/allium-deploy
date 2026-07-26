@@ -9,8 +9,25 @@
 
 import { onRequest as handleSearch } from '../functions/search.js';
 
+const REHEARSAL_HOSTNAME = 'metrics-next.1aeo.com';
+
 function isSearchPath(pathname) {
   return pathname === '/search' || pathname.startsWith('/search/');
+}
+
+function isNonProductionHostname(hostname) {
+  return hostname === REHEARSAL_HOSTNAME || hostname.endsWith('.workers.dev');
+}
+
+function withNonProductionRobotsHeader(response) {
+  const headers = new Headers(response.headers);
+  headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export default {
@@ -21,11 +38,15 @@ export default {
       return env.ALLIUM_ASSETS.fetch(request);
     }
 
-    return handleSearch({
+    const response = await handleSearch({
       request,
       env,
       waitUntil: executionCtx.waitUntil.bind(executionCtx),
       passThroughOnException: executionCtx.passThroughOnException?.bind(executionCtx),
     });
+
+    return isNonProductionHostname(url.hostname)
+      ? withNonProductionRobotsHeader(response)
+      : response;
   },
 };
