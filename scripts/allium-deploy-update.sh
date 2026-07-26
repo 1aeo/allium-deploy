@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
+UPDATE_STARTED_EPOCH="$(date +%s)"
+UPDATE_STARTED_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
@@ -44,6 +46,9 @@ R2_ENABLED="${R2_ENABLED:-true}"
 DO_ENABLED="${DO_ENABLED:-false}"
 CF_ASSETS_ENABLED="${CF_ASSETS_ENABLED:-false}"
 CF_ASSETS_REQUIRED="${CF_ASSETS_REQUIRED:-false}"
+CF_ASSETS_CONSECUTIVE_FILE="${CF_ASSETS_CONSECUTIVE_FILE:-$DEPLOY_DIR/logs/cfassets-shadow-consecutive-successes}"
+CF_ASSETS_JOB_SUMMARY_FILE="${CF_ASSETS_JOB_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-stage2-job-summary.tsv}"
+CF_ASSETS_MAX_JOB_SECONDS="${CF_ASSETS_MAX_JOB_SECONDS:-1800}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -263,9 +268,57 @@ rollback_guarded_pulls() {
     fi
 }
 
+# Record one bounded row per scheduled Stage 2 job. A failure anywhere in the
+# generator/publisher/purge job, or a total runtime beyond the scheduler
+# interval, breaks the consecutive-build streak even when the route-free
+# Worker candidate itself happened to verify successfully.
+record_stage2_job_result() {
+    local status="$1"
+    local started_epoch="$2"
+    local started_utc="$3"
+    local finished_epoch="${4:-$(date +%s)}"
+    local finished_utc="${5:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+
+    [[ "$CF_ASSETS_ENABLED" == "true" ]] || return 0
+
+    local duration cadence_ok=true counter=0 counter_tmp
+    duration=$((finished_epoch - started_epoch))
+    if [[ ! "$CF_ASSETS_MAX_JOB_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+        log "⚠️ Invalid CF_ASSETS_MAX_JOB_SECONDS=$CF_ASSETS_MAX_JOB_SECONDS; using 1800"
+        CF_ASSETS_MAX_JOB_SECONDS=1800
+    fi
+
+    if ((duration > CF_ASSETS_MAX_JOB_SECONDS)); then
+        cadence_ok=false
+    fi
+
+    if [[ "$status" -ne 0 || "$cadence_ok" != "true" ]]; then
+        mkdir -p "$(dirname "$CF_ASSETS_CONSECUTIVE_FILE")"
+        counter_tmp="${CF_ASSETS_CONSECUTIVE_FILE}.tmp.$$"
+        printf '0\n' > "$counter_tmp"
+        mv "$counter_tmp" "$CF_ASSETS_CONSECUTIVE_FILE"
+    fi
+
+    counter=$(cat "$CF_ASSETS_CONSECUTIVE_FILE" 2>/dev/null || printf '0')
+    [[ "$counter" =~ ^[0-9]+$ ]] || counter=0
+
+    mkdir -p "$(dirname "$CF_ASSETS_JOB_SUMMARY_FILE")"
+    if [[ ! -f "$CF_ASSETS_JOB_SUMMARY_FILE" ]]; then
+        printf 'started_utc\tfinished_utc\texit_status\ttotal_duration_seconds\tcadence_ok\tshadow_counter\n' \
+            > "$CF_ASSETS_JOB_SUMMARY_FILE"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$started_utc" "$finished_utc" "$status" "$duration" "$cadence_ok" "$counter" \
+        >> "$CF_ASSETS_JOB_SUMMARY_FILE"
+
+    log "Stage 2 job result: status=$status total=${duration}s cadence_ok=$cadence_ok shadow_counter=$counter"
+}
+
 if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
+
+trap 'update_status=$?; trap - EXIT; set +e; record_stage2_job_result "$update_status" "$UPDATE_STARTED_EPOCH" "$UPDATE_STARTED_UTC"; exit "$update_status"' EXIT
 
 # Cloudflare CDN purge (runs once after all uploads)
 purge_cdn() {

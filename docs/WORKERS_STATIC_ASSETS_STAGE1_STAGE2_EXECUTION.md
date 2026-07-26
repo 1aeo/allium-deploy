@@ -282,6 +282,27 @@ domain mutation was attempted. The live rehearsal therefore remains pending
 until the host's temporary Worker token is replaced with the plan's restricted
 DNS Write and Workers Routes Write permissions.
 
+## Complete scheduled-job evidence
+
+The first two finalized runs proved total end-to-end durations of 12 minutes 13
+seconds and 14 minutes 37 seconds, but the original bounded TSV recorded only
+the Worker upload-plus-verifier child duration. The original counter also reset
+on a Worker child failure but could not see an earlier generator or storage job
+failure. Both runs remain valid because their complete logs were inspected and
+proved successful and below the 30-minute interval.
+
+Commit-time tests now cover one additional bounded runtime record:
+`logs/cfassets-stage2-job-summary.tsv` receives exactly one row at process exit
+with start and finish UTC timestamps, original exit status, total duration,
+cadence result, and resulting shadow counter. With Workers shadow publishing
+enabled, any nonzero scheduled-job exit or total duration over the configured
+1,800-second interval atomically resets the consecutive counter to zero. A
+successful job at or below the interval preserves the verifier-managed count.
+The recorder preserves the original process exit status and adds only one
+aggregate log line; it does not collect requests, URLs, clients, or response
+bodies. It does not alter generation, asset preparation, search, storage,
+purging, routing, DNS, or production traffic.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
