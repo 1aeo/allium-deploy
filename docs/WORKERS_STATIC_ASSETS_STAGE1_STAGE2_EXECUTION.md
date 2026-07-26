@@ -303,6 +303,17 @@ aggregate log line; it does not collect requests, URLs, clients, or response
 bodies. It does not alter generation, asset preparation, search, storage,
 purging, routing, DNS, or production traffic.
 
+The read-only `pnpm audit:cfassets-soak` command performs the repeatable gate
+audit over those two bounded files and the authoritative counter. It selects
+only the current consecutive suffix after any earlier reset, checks sequential
+counters and unique Worker versions, correlates each candidate verification
+timestamp with its complete job, requires real `:15`/`:45` scheduled starts
+without a missed slot, enforces successful sub-1,800-second jobs, checks the
+100,000-file platform ceiling, and flags adjacent file-count or prepared-byte
+changes above 10% for investigation. `--require-complete` makes the command
+fail until the configured target (100 by default) is reached. The audit is
+read-only and cannot upload, deploy, purge, route, or reset the streak.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
