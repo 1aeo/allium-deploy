@@ -39,6 +39,24 @@ grep -q 'X-Robots-Tag: noindex, nofollow' "$TMP_DIR/output/_headers" || fail "pr
 grep -q 'The requested Allium metrics page does not exist' "$TMP_DIR/output/404.html" || fail "custom 404 installed"
 pass "route-free shadow config and headers are generated"
 
+mkdir -p "$TMP_DIR/explicit-output"
+printf '<html>explicit root</html>\n' > "$TMP_DIR/explicit-output/index.html"
+printf '{"meta":{"version":"1.6"},"relays":[]}\n' > "$TMP_DIR/explicit-output/search-index.json"
+
+CF_ASSETS_REQUIRE_FRESH_CHECKOUT=false \
+CF_ASSETS_WORKER_NAME=allium-shadow-test \
+CF_ASSETS_PREVIEW_ALIAS=allium-test \
+CF_ASSETS_CONFIG="$TMP_DIR/wrangler.explicit.toml" \
+CF_ASSETS_DIRECTORY="$TMP_DIR/explicit-output" \
+OUTPUT_DIR="$TMP_DIR/output" \
+    "$REPO_DIR/scripts/allium-deploy-cfassets.sh" --generate-only >/dev/null
+
+grep -q "directory = \"$TMP_DIR/explicit-output\"" "$TMP_DIR/wrangler.explicit.toml" || \
+    fail "explicit assets directory did not override OUTPUT_DIR"
+grep -q 'X-Robots-Tag: noindex, nofollow' "$TMP_DIR/explicit-output/_headers" || \
+    fail "headers were not installed in explicit assets directory"
+pass "explicit assets directory overrides the production output default"
+
 set +e
 CF_ASSETS_REQUIRE_FRESH_CHECKOUT=false \
 CF_ASSETS_ALLOW_PROMOTION=false \
