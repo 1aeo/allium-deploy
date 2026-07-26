@@ -133,6 +133,17 @@ binding while requiring search to load the external Pages index successfully.
 Telemetry is redeployed only after this regression and the full production
 search smoke test pass.
 
+The live Cloudflare Pages control plane was checked again at
+`2026-07-26T20:07:33Z`. The Pages Projects API reported project
+`1aeo-metrics`, canonical production deployment
+`c22ea1d7-7b34-46fe-9f63-2a9847890034`, environment `production`, and the
+`SOURCE_EVENTS` Analytics Engine binding targeting dataset
+`allium_source_events`. The telemetry tests independently prove that a
+successful R2 fallback emits one bounded point, a DigitalOcean response emits
+none, an all-source failure emits one point without a URL or client identity,
+and a binding write failure cannot affect the content response. Normal request
+logging remains disabled.
+
 ## First scheduled Stage 2 build and scheduler cadence
 
 Manual experiment evidence was moved to dated `stage1-manual` files before the
