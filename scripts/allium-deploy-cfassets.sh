@@ -127,11 +127,16 @@ load_cloudflare_token() {
 }
 
 run_wrangler() {
-    if command -v pnpm >/dev/null 2>&1; then
-        pnpm exec wrangler "$@"
-    else
-        npx wrangler "$@"
-    fi
+    (
+        cd "$DEPLOY_DIR"
+        if command -v pnpm >/dev/null 2>&1; then
+            pnpm exec wrangler "$@"
+        elif command -v corepack >/dev/null 2>&1; then
+            corepack pnpm exec wrangler "$@"
+        else
+            npx --no-install wrangler "$@"
+        fi
+    )
 }
 
 record_failure() {

@@ -54,6 +54,29 @@ if ! python3 -c "import jinja2" 2>/dev/null; then
 fi
 echo "✅ System dependencies ready"
 
+# --- WORKERS TOOLCHAIN ---
+if [[ "${CF_ASSETS_ENABLED:-false}" == "true" ]]; then
+    echo ""
+    echo "📦 Installing pinned Workers toolchain..."
+    if ! command -v node >/dev/null 2>&1; then
+        echo "❌ Node.js is required when CF_ASSETS_ENABLED=true"
+        exit 1
+    fi
+    if ! node -e 'const [major] = process.versions.node.split(".").map(Number); process.exit(major >= 18 ? 0 : 1)'; then
+        echo "❌ Node.js 18+ is required for the pinned Workers toolchain"
+        exit 1
+    fi
+    if ! command -v corepack >/dev/null 2>&1; then
+        echo "❌ corepack is required to install the pinned pnpm/Wrangler toolchain"
+        exit 1
+    fi
+    (
+        cd "$DEPLOY_DIR"
+        corepack pnpm install --frozen-lockfile
+    )
+    echo "✅ Workers toolchain ready"
+fi
+
 # --- RCLONE SETUP ---
 echo ""
 echo "📦 Setting up rclone..."
@@ -151,4 +174,3 @@ echo "  Manual update:    $SCRIPT_DIR/allium-deploy-update.sh"
 echo "  Manual upload:    $SCRIPT_DIR/allium-deploy-upload.sh"
 echo "  List backups:     $SCRIPT_DIR/allium-deploy-upload.sh --list-backups"
 echo "  View cron:        cat /etc/cron.d/allium"
-
