@@ -5,8 +5,9 @@ set -euo pipefail
 
 PREVIEW_URL="${1:-}"
 SOURCE_DIR="${2:-${OUTPUT_DIR:-$HOME/metrics-output}}"
-ATTEMPTS="${CF_ASSETS_VERIFY_ATTEMPTS:-3}"
-RETRY_DELAY="${CF_ASSETS_VERIFY_RETRY_DELAY:-1}"
+REQUIRED_PASSES="${CF_ASSETS_VERIFY_ATTEMPTS:-3}"
+MAX_ATTEMPTS="${CF_ASSETS_VERIFY_MAX_ATTEMPTS:-12}"
+RETRY_DELAY="${CF_ASSETS_VERIFY_RETRY_DELAY:-10}"
 CURL_TIMEOUT="${CF_ASSETS_VERIFY_CURL_TIMEOUT:-60}"
 
 if [[ -z "$PREVIEW_URL" ]]; then
@@ -170,19 +171,38 @@ LARGEST_FILE="${LARGEST_RECORD#* }"
 NESTED_PATH=$(path_for_file "$NESTED_FILE")
 LARGEST_PATH=$(path_for_file "$LARGEST_FILE")
 
-for ((attempt=1; attempt<=ATTEMPTS; attempt++)); do
-    log "verification attempt $attempt/$ATTEMPTS for $PREVIEW_URL"
-    fetch_and_hash root / "$ROOT_FILE"
-    fetch_and_hash search-index /search-index.json "$INDEX_FILE"
-    fetch_and_hash directory "$NESTED_PATH" "$NESTED_FILE"
-    fetch_and_hash largest "$LARGEST_PATH" "$LARGEST_FILE"
-    verify_headers
-    verify_directory_and_404 "$NESTED_FILE"
-    verify_search
+run_check_set() {
+    fetch_and_hash root / "$ROOT_FILE" || return 1
+    fetch_and_hash search-index /search-index.json "$INDEX_FILE" || return 1
+    fetch_and_hash directory "$NESTED_PATH" "$NESTED_FILE" || return 1
+    fetch_and_hash largest "$LARGEST_PATH" "$LARGEST_FILE" || return 1
+    verify_headers || return 1
+    verify_directory_and_404 "$NESTED_FILE" || return 1
+    verify_search || return 1
+}
 
-    if (( attempt < ATTEMPTS )); then
+[[ "$REQUIRED_PASSES" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid required pass count: $REQUIRED_PASSES" >&2; exit 2; }
+[[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid max attempt count: $MAX_ATTEMPTS" >&2; exit 2; }
+(( MAX_ATTEMPTS >= REQUIRED_PASSES )) || { echo "Max attempts must be at least required passes" >&2; exit 2; }
+
+consecutive=0
+for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
+    log "verification attempt $attempt/$MAX_ATTEMPTS; consecutive=$consecutive/$REQUIRED_PASSES for $PREVIEW_URL"
+    if run_check_set; then
+        consecutive=$((consecutive + 1))
+        if (( consecutive >= REQUIRED_PASSES )); then
+            log "all checks passed $REQUIRED_PASSES consecutive times for $PREVIEW_URL"
+            exit 0
+        fi
+    else
+        consecutive=0
+        log "attempt $attempt did not pass; waiting ${RETRY_DELAY}s for bounded edge propagation"
+    fi
+
+    if (( attempt < MAX_ATTEMPTS )); then
         sleep "$RETRY_DELAY"
     fi
 done
 
-log "all checks passed for $PREVIEW_URL"
+log "verification failed: $REQUIRED_PASSES consecutive passes were not reached in $MAX_ATTEMPTS attempts"
+exit 1

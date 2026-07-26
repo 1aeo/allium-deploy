@@ -111,6 +111,14 @@ The full tree also exposed SIGPIPE exit 141 in the verifier's `sort | awk`
 first-record selection under `pipefail`. The selector now consumes the full
 stream and has passed against all 29,354 prepared files.
 
+The first production-output shadow candidate then reproduced the documented
+edge-propagation window: immediately after version upload, `/` matched the new
+local hash while `search-index.json` briefly returned an older hash. The
+verifier previously exited on that first failure despite its attempt setting.
+It now permits at most 12 bounded attempts, waits 10 seconds between them, and
+requires three complete consecutive passes before incrementing the soak
+counter. Any later failure resets the within-version pass count.
+
 The first Pages telemetry deployment exposed a binding-name collision during
 the immediate production smoke test. Cloudflare Pages provides its own
 `ASSETS` binding for the Pages static bundle. Search incorrectly treated that
