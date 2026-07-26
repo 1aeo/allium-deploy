@@ -256,6 +256,32 @@ repeat these checks on `metrics-next.1aeo.com`, including the stricter
 Worker-generated `noindex, nofollow` value that workers.dev itself normalizes
 to `noindex`.
 
+## Non-production route rehearsal readiness
+
+At `2026-07-26T20:32:56Z`, the current Cloudflare API documentation and the
+installed Wrangler 4.86.0 command help were checked against the rehearsal
+runbook. They agree on `POST` and `DELETE` operations under
+`/zones/{zone_id}/dns_records` and `/zones/{zone_id}/workers/routes`, and on
+the non-interactive deployment form
+`wrangler versions deploy VERSION_ID@100% --yes`.
+
+The exact deployment command was then run with `--dry-run` against the generated
+route-free `wrangler.assets.toml`. Wrangler fetched the live deployment,
+selected verified version `53164b95-f100-4289-8098-a71b92a7950a` at 100%, and
+exited without creating a deployment. It also proved that the dedicated
+Worker's active deployment remains the route-free bootstrap version
+`2678d1f7-b756-40b5-9728-03a630cc7d4b`. The config contains only the expected
+workers.dev and preview-URL settings; it has no zone route or custom domain.
+The latest candidate must be re-verified and substituted for this dry-run
+version immediately before the real rehearsal.
+
+A direct read-only permission check resolved the `1aeo.com` zone successfully,
+but the exact DNS-record and Workers-route list calls both returned Cloudflare
+authentication error 10000. No DNS record, Worker route, deployment, or custom
+domain mutation was attempted. The live rehearsal therefore remains pending
+until the host's temporary Worker token is replaced with the plan's restricted
+DNS Write and Workers Routes Write permissions.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
