@@ -233,6 +233,18 @@ search returned the expected HTTP 302 relay redirect. Production responses had
 no `X-Robots-Tag`; no production DNS, route, custom domain, or request path
 changed.
 
+The same finalized alias was then checked independently through SJC and LAS.
+SJC matched the exact local SHA-256 for the root, search index, `/1aeo.com/`,
+and the largest `/flag/running/` page; search returned the version-matched relay
+redirect. Both colos returned `CF-Cache-Status: HIT` and preview `noindex`.
+An SJC conditional request using the returned asset ETag produced HTTP 304 with
+the same ETag and `Cache-Control: public, max-age=0, must-revalidate`. A request
+using the `GPTBot/1.0` user agent returned HTTP 200 rather than a WAF block and
+remained `noindex` on the non-production alias. The temporary zone route will
+repeat these checks on `metrics-next.1aeo.com`, including the stricter
+Worker-generated `noindex, nofollow` value that workers.dev itself normalizes
+to `noindex`.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
