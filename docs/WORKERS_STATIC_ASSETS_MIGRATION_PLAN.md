@@ -280,7 +280,19 @@ The search parity corpus includes:
 
 ## Stage 2 — Shadow soak and production-route rehearsal
 
-Workers publishing must soak without production traffic for at least 100 consecutive scheduled builds, approximately 50 hours. Preferably run it for a full seven days to cover normal Allium updates, schema changes, network variability, automatic repository pulls, and backup activity.
+Workers publishing must soak without production traffic for at least 10
+consecutive scheduled builds, approximately five hours. This is a deployment-
+practicality gate: it proves repeated full-tree generation, upload, propagation,
+and verification fit the 30-minute interval before the separately reversible
+production stage. It is not intended to estimate a rare long-term failure rate.
+The initial 100-build proposal would have covered approximately 50 hours and,
+under an independent-failure model, zero failures would place a rough 95%
+upper bound near 3% per build; 10 failures-free samples place that rough bound
+near 30%. The user accepted the smaller sample because Stage 2 also requires
+the exact route-and-rollback rehearsal, Pages remains the immediate rollback,
+and every-build DO and R2 redundancy remains through the later seven-day
+production soak. Shadow builds may continue beyond 10 while other gates are
+pending, but 10 is the formal Stage 2 soak threshold.
 
 Success requires:
 
@@ -590,7 +602,7 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] Still-fresh five-minute cached asset update verified without purge.
 - [x] Preview-only full version upload and multi-colo hash gate verified.
 - [ ] Stage 1 code reviewed, tested, committed, and deployed in shadow-only mode.
-- [ ] At least 100 consecutive shadow builds pass.
+- [ ] At least 10 consecutive shadow builds pass.
 - [ ] Non-production hostname route rehearsal passes.
 - [ ] Production candidate passes preview health gate.
 - [ ] Production switches 100% to the Worker route.

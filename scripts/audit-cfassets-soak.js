@@ -94,7 +94,7 @@ export function auditSoak({
   shadowTsv,
   jobTsv,
   counter,
-  target = 100,
+  target = 10,
   maxDeltaPercent = 10,
   maxJobSeconds = 1800,
   maxAssetFiles = 100000,
@@ -245,7 +245,7 @@ function runCli() {
   const shadowPath = argumentValue(args, '--shadow', 'logs/cfassets-shadow-summary.tsv');
   const jobPath = argumentValue(args, '--jobs', 'logs/cfassets-stage2-job-summary.tsv');
   const counterPath = argumentValue(args, '--counter', 'logs/cfassets-shadow-consecutive-successes');
-  const target = Number(argumentValue(args, '--target', '100'));
+  const target = Number(argumentValue(args, '--target', '10'));
   const maxDeltaPercent = Number(argumentValue(args, '--max-delta-percent', '10'));
   const requireComplete = args.includes('--require-complete');
   const report = auditSoak({

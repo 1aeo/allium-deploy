@@ -43,6 +43,14 @@ test('accepts a complete sequential scheduled segment', () => {
   assert.deepEqual(report.currentSegment.totalJobDurationSeconds, { min: 733, max: 1040 });
 });
 
+test('defaults the formal Stage 2 gate to ten builds', () => {
+  const fixture = validFixture();
+  delete fixture.target;
+  const report = auditSoak(fixture);
+  assert.equal(report.ok, true, report.errors.join('\n'));
+  assert.deepEqual(report.progress, { current: 3, target: 10, complete: false });
+});
+
 test('audits only the current suffix after an earlier reset', () => {
   const fixture = validFixture();
   const shadowLines = fixture.shadowTsv.split('\n');
