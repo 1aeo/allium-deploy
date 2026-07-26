@@ -37,14 +37,26 @@ setup_common_vars() {
     BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-128M}"
     S3_CONCURRENCY="${RCLONE_S3_UPLOAD_CONCURRENCY:-32}"
     S3_CHUNK="${RCLONE_S3_CHUNK_SIZE:-16M}"
+    RCLONE_FAST_LIST="${RCLONE_FAST_LIST:-true}"
     
     DAILY_LOCAL_BACKUP="${DAILY_LOCAL_BACKUP:-true}"
 }
 
 build_rclone_opts() {
+    local fast_list_opt=""
+
+    case "$RCLONE_FAST_LIST" in
+        true) fast_list_opt="--fast-list" ;;
+        false) ;;
+        *)
+            echo "RCLONE_FAST_LIST must be true or false (got: $RCLONE_FAST_LIST)" >&2
+            return 2
+            ;;
+    esac
+
     # _headers is parsed by Workers Static Assets and must not become an
     # object in the DO or R2 mirrors.
-    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK --fast-list --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
+    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK $fast_list_opt --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
 }
 
 # --- Backup Functions ---

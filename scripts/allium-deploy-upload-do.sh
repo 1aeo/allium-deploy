@@ -24,6 +24,10 @@ STORAGE_NAME="DO-Spaces"
 # Override parallelism for DO Spaces (lower to avoid 503 rate limiting)
 TRANSFERS="${DO_RCLONE_TRANSFERS:-56}"
 CHECKERS="${DO_RCLONE_CHECKERS:-80}"
+# The retained _backups tree is much larger than the hot mirror. Disabling
+# ListR lets rclone prune that excluded directory instead of recursively
+# enumerating every retained backup object on each scheduled sync.
+RCLONE_FAST_LIST="${DO_RCLONE_FAST_LIST:-false}"
 
 # DO Spaces configuration
 DO_REGION="${DO_SPACES_REGION:-nyc3}"

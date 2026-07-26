@@ -133,20 +133,63 @@ binding while requiring search to load the external Pages index successfully.
 Telemetry is redeployed only after this regression and the full production
 search smoke test pass.
 
+## First scheduled Stage 2 build and scheduler cadence
+
+Manual experiment evidence was moved to dated `stage1-manual` files before the
+scheduled soak began, so the scheduled counter started from zero. The first
+real `:15` cron build began at `2026-07-26T18:15:01Z`, generated a fresh Allium
+tree, and published the same completed output to R2, DigitalOcean, and the
+route-free Workers shadow in parallel.
+
+The Workers candidate contained 29,686 asset files and 4,657,186,619 prepared
+bytes. Wrangler uploaded 29,287 changed assets, reused 399 account-level assets,
+and produced version `ce63217c-27da-45ca-ad1b-5aca8c837452`. During bounded
+propagation, verification attempts 1–3 observed transient representative hash
+mismatches. Attempts 4–6 then passed every check, producing the required three
+consecutive complete passes. The scheduled result was recorded at
+`2026-07-26T18:27:01Z` in 473 seconds as consecutive success 1.
+
+The integrated run also exposed a pre-existing scheduler bottleneck unrelated
+to Workers: DigitalOcean's hot-mirror sync took 50–58 minutes even when it
+reported zero bytes transferred. The shared upload options forced
+`--fast-list`, which recursively enumerated the retained `_backups` object tree
+before applying its exclusion. Because the host cron runs at `:15` and `:45`
+under a single non-blocking lock, that enumeration caused scheduled Allium
+builds to be skipped and would have stretched the nominal 50-hour soak toward
+six days. This is the behavior documented in rclone's
+[directory-recursion filtering rules](https://rclone.org/filtering/#how-filter-rules-are-applied-to-directories):
+directory pruning is available for a non-recursive `sync` only when
+`--fast-list` is not used.
+
+No retention setting or backup object was changed. A full read-only
+DigitalOcean `sync --dry-run` kept the same source, destination, excludes,
+comparison, and stale-object deletion semantics but omitted `--fast-list` so
+rclone could prune the excluded backup directory before recursion. It exited 0
+in 145 seconds. The resulting backend-specific setting defaults
+`DO_RCLONE_FAST_LIST=false`; R2 retains `--fast-list` and its approximately
+four-minute behavior. `DO_RCLONE_FAST_LIST=true` remains an explicit rollback
+override. The option builder rejects invalid boolean values, and
+`tests/test-rclone-options.sh` covers both modes and the DigitalOcean default.
+
+This is a traversal optimization only. DigitalOcean remains an every-build hot
+mirror, R2 remains an every-build mirror through the production soak, remote
+and local backup cadence remains daily, retention remains unchanged, and the
+full `rclone sync` stale-object comparison remains enabled.
+
 ## Stage 2 completion gates
 
-- [ ] Feature branch reviewed, committed, pushed, and fast-forwarded to
+- [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
   production `main`.
-- [ ] Route-free configuration rechecked after production merge.
-- [ ] Sparse Pages source telemetry enabled and its failure-isolation behavior
+- [x] Route-free configuration rechecked after production merge.
+- [x] Sparse Pages source telemetry enabled and its failure-isolation behavior
   verified.
-- [ ] Scheduled shadow publication enabled with
+- [x] Scheduled shadow publication enabled with
   `CF_ASSETS_REQUIRED=false`.
 - [ ] At least 100 consecutive scheduled candidate builds pass.
 - [ ] No candidate exceeds the generation interval.
 - [ ] No candidate hash mismatch, missing representative asset, search
   regression, or unexplained size/count growth.
-- [ ] Representative checks pass from both the hosted LAS path and a second
+- [x] Representative checks pass from both the hosted LAS path and a second
   Cloudflare colo.
 - [ ] `metrics-next.1aeo.com` rehearses the exact zone-level route, TLS,
   redirects, WAF behavior, caching, search, and rollback.
