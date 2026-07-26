@@ -193,6 +193,46 @@ mirror, R2 remains an every-build mirror through the production soak, remote
 and local backup cadence remains daily, retention remains unchanged, and the
 full `rclone sync` stale-object comparison remains enabled.
 
+## First finalized scheduled Stage 2 build
+
+The first build counted toward the final-code soak started from the host's
+`:45` cron entry at `2026-07-26T19:45:01Z`; no manual upload preceded it. Fresh
+Allium generation completed in 3 minutes 45 seconds with search-index schema
+1.6. The three publishers began together at `19:49:09Z` against the same
+completed output tree.
+
+The live DigitalOcean process omitted `--fast-list`, while the simultaneous R2
+process retained it. DigitalOcean's own progress reached the full 4.324 GiB at
+`19:51:49Z`, about 2 minutes 40 seconds after publisher start. Because the
+parent script waits for R2 before collecting the already-finished DigitalOcean
+child, its intentionally coarse aggregate log reports both storage publishers
+at R2's later 4 minute 38 second completion point. No backup or retention
+setting changed.
+
+The route-free Worker upload produced version
+`f747c2c0-312e-4bee-830b-2d17de468c70`. Wrangler uploaded 29,276 changed assets
+and reused 399 account-level assets. The first verification attempt observed a
+bounded `search-index.json` propagation mismatch; attempts 2, 3, and 4 then
+passed the root, index, nested directory, largest page, headers, canonical
+redirect, custom 404, and version-matched search checks consecutively.
+
+The authoritative summary recorded the result at `2026-07-26T19:54:56Z`:
+
+| Measurement | Result |
+|---|---:|
+| Worker upload plus verification | 345 seconds |
+| Asset files | 29,675 |
+| Prepared bytes | 4,656,928,482 |
+| Consecutive finalized scheduled successes | 1 |
+| Total generation, publishing, verification, and purge | 12 minutes 13 seconds |
+
+The complete job ended at `19:57:14Z`, leaving 17 minutes 47 seconds before the
+next scheduled slot. Immediate production checks still returned HTTP 200 for
+the root and `/index.html` from `digitalocean-spaces`, and a full-fingerprint
+search returned the expected HTTP 302 relay redirect. Production responses had
+no `X-Robots-Tag`; no production DNS, route, custom domain, or request path
+changed.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
