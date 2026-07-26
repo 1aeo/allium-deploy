@@ -1,7 +1,11 @@
 {
   "name": "allium-deploy",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
   "devDependencies": {
     "wrangler": "4.110.0"
   }

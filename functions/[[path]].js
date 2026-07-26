@@ -46,6 +46,37 @@ function getCacheKey(request) {
   return new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
 }
 
+function getRouteCategory(path) {
+  if (path === 'metrics' || path.endsWith('/metrics')) return 'metrics';
+  const extension = path.includes('.') ? path.split('.').pop().toLowerCase() : '';
+  if (extension === 'json') return 'json';
+  if (extension === 'html' || path.endsWith('/index.html')) return 'html';
+  if (isStaticAsset(path)) return 'static';
+  return 'other';
+}
+
+function recordSourceEvent(env, request, source, status, path) {
+  if (!env.SOURCE_EVENTS) return;
+  // DigitalOcean is the expected primary during migration. Persist only the
+  // rare evidence that X-Served-From previously exposed ephemerally.
+  if (source === 'digitalocean-spaces' && status === 'served') return;
+
+  try {
+    env.SOURCE_EVENTS.writeDataPoint({
+      indexes: ['allium-source'],
+      blobs: [
+        source,
+        status,
+        getRouteCategory(path),
+        request.cf?.colo || 'unknown',
+      ],
+      doubles: [1],
+    });
+  } catch {
+    // Observability must never affect content delivery.
+  }
+}
+
 function buildResponse(body, path, source, env) {
   const cacheTTL = getCacheTTL(path, env);
   const contentType = getMimeType(path);
@@ -252,6 +283,7 @@ export async function onRequest(context) {
         context.waitUntil(cache.put(cacheKey, responseToCache));
 
         response.headers.set('X-Cache-Status', 'MISS');
+        recordSourceEvent(env, request, source.name, 'served', path);
         return response;
       }
     } catch (err) {
@@ -261,6 +293,7 @@ export async function onRequest(context) {
   }
 
   // Nothing found
+  recordSourceEvent(env, request, 'none', 'all-sources-failed', path);
   return new Response(`Not Found: ${path}`, {
     status: 404,
     headers: {

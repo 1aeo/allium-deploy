@@ -1,0 +1,17 @@
+# Allium Workers Static Assets shadow/production configuration.
+# Generated as wrangler.assets.toml by scripts/allium-deploy-cfassets.sh.
+# Production routes and custom domains are intentionally absent. Stage 3 must
+# add traffic routing through a separately reviewed change.
+
+name = "{{CF_ASSETS_WORKER_NAME}}"
+main = "workers/search.js"
+compatibility_date = "{{CF_ASSETS_COMPATIBILITY_DATE}}"
+preview_urls = true
+workers_dev = true
+
+[assets]
+directory = "{{CF_ASSETS_DIRECTORY}}"
+binding = "ASSETS"
+not_found_handling = "404-page"
+html_handling = "auto-trailing-slash"
+run_worker_first = [ "/search", "/search/*" ]

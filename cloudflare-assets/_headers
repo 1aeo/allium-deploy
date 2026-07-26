@@ -1,0 +1,16 @@
+# Production static responses retain Cloudflare's default
+# Cache-Control: public, max-age=0, must-revalidate and asset ETags.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'none'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'
+
+# Every workers.dev preview is deliberately excluded from indexing. This rule
+# does not match metrics.1aeo.com, where AI and ordinary indexing remain allowed.
+https://:version.:subdomain.workers.dev/*
+  X-Robots-Tag: noindex, nofollow
+
+# Stage 2 zone-level route rehearsal hostname.
+https://metrics-next.1aeo.com/*
+  X-Robots-Tag: noindex, nofollow

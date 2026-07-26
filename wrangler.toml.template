@@ -29,3 +29,6 @@ CACHE_TTL_STATIC = "{{CACHE_TTL_STATIC}}"
 
 # Cloudflare CDN cache purge secret
 PURGE_SECRET = "{{PURGE_SECRET}}"
+
+# Sparse non-primary-source telemetry (only if enabled)
+{{SOURCE_EVENTS_SECTION}}

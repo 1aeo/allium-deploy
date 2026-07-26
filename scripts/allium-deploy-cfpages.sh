@@ -191,6 +191,8 @@ FAILOVER_ORIGIN_URL="${FAILOVER_ORIGIN_URL:-}"
 CACHE_TTL_HTML="${CACHE_TTL_HTML:-1800}"
 CACHE_TTL_STATIC="${CACHE_TTL_STATIC:-86400}"
 PURGE_SECRET="${PURGE_SECRET:-}"
+SOURCE_EVENTS_ENABLED="${SOURCE_EVENTS_ENABLED:-false}"
+SOURCE_EVENTS_DATASET="${SOURCE_EVENTS_DATASET:-allium_source_events}"
 
 # Build conditional sections
 R2_BUCKET_SECTION=""
@@ -209,6 +211,15 @@ else
     DO_SPACES_URL_VAR="# DO_SPACES_URL not configured (DO_ENABLED=false)"
 fi
 
+SOURCE_EVENTS_SECTION=""
+if [[ "$SOURCE_EVENTS_ENABLED" == "true" ]]; then
+    SOURCE_EVENTS_SECTION="[[analytics_engine_datasets]]
+binding = \"SOURCE_EVENTS\"
+dataset = \"${SOURCE_EVENTS_DATASET}\""
+else
+    SOURCE_EVENTS_SECTION="# Sparse source telemetry disabled (SOURCE_EVENTS_ENABLED=false)"
+fi
+
 # Generate wrangler.toml
 sed -e "s|{{PAGES_PROJECT_NAME}}|${PAGES_PROJECT_NAME}|g" \
     -e "s|{{WRANGLER_COMPATIBILITY_DATE}}|${WRANGLER_COMPATIBILITY_DATE}|g" \
@@ -221,9 +232,10 @@ sed -e "s|{{PAGES_PROJECT_NAME}}|${PAGES_PROJECT_NAME}|g" \
     "$TEMPLATE_FILE" > "$OUTPUT_FILE.tmp"
 
 # Replace multi-line sections (sed can't handle these well)
-awk -v r2_section="$R2_BUCKET_SECTION" -v do_section="$DO_SPACES_URL_VAR" '
+awk -v r2_section="$R2_BUCKET_SECTION" -v do_section="$DO_SPACES_URL_VAR" -v source_events_section="$SOURCE_EVENTS_SECTION" '
     /\{\{R2_BUCKET_SECTION\}\}/ { print r2_section; next }
     /\{\{DO_SPACES_URL_VAR\}\}/ { print do_section; next }
+    /\{\{SOURCE_EVENTS_SECTION\}\}/ { print source_events_section; next }
     { print }
 ' "$OUTPUT_FILE.tmp" > "$OUTPUT_FILE"
 rm -f "$OUTPUT_FILE.tmp"

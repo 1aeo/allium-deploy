@@ -365,15 +365,24 @@ function buildLookupMaps(raw) {
   });
 }
 
-async function loadIndex(origin) {
+async function loadIndex(origin, env) {
   const now = Date.now();
   if (cachedIndex && now < cacheExpiry) return cachedIndex;
   
   let res;
   try {
-    res = await fetch(`${origin}/search-index.json`, {
-      cf: { cacheTtl: 300, cacheEverything: true },
-    });
+    const indexRequest = new Request(`${origin}/search-index.json`);
+    if (env?.ASSETS) {
+      // Workers Static Assets: bind search to the index captured in this exact
+      // Worker version. This avoids version skew and does not use R2 or an
+      // external HTTP origin.
+      res = await env.ASSETS.fetch(indexRequest);
+    } else {
+      // Cloudflare Pages compatibility during the migration.
+      res = await fetch(indexRequest, {
+        cf: { cacheTtl: 300, cacheEverything: true },
+      });
+    }
   } catch (e) {
     throw searchError(ERR.INDEX_HTTP, 'Network error fetching index', e.message);
   }
@@ -692,6 +701,13 @@ function renderError(err, query) {
 
 // Storage check functions: return true/false if definitive, null if unavailable
 const STORAGE_CHECKERS = {
+  async assets(env, path) {
+    if (!env?.ASSETS) return null;
+    try {
+      const res = await env.ASSETS.fetch(new Request(`https://assets.local/${path}`));
+      return res.ok;
+    } catch { return null; }
+  },
   async r2(env, path) {
     if (!env?.METRICS_CONTENT) return null;
     try {
@@ -723,7 +739,8 @@ async function isAroiDomainValidated(idx, env, domain) {
   
   // Fallback: check storage backends in order
   const path = `${domain}/index.html`;
-  const order = (env?.STORAGE_ORDER || 'r2,do').split(',');
+  const defaultOrder = env?.ASSETS ? 'assets,r2,do' : 'r2,do';
+  const order = (env?.STORAGE_ORDER || defaultOrder).split(',');
   
   for (const backend of order) {
     const checker = STORAGE_CHECKERS[backend.trim()];
@@ -753,7 +770,7 @@ export async function onRequest(ctx) {
   }
   
   try {
-    const idx = await loadIndex(url.origin);
+    const idx = await loadIndex(url.origin, ctx.env);
     const result = search(q, idx);
     
     // Direct redirect for single-match types

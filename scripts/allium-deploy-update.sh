@@ -42,6 +42,8 @@ CONSECUTIVE_FAILURES_FILE="/tmp/allium-deploy-failures"
 STORAGE_ORDER="${STORAGE_ORDER:-r2,do,failover}"
 R2_ENABLED="${R2_ENABLED:-true}"
 DO_ENABLED="${DO_ENABLED:-false}"
+CF_ASSETS_ENABLED="${CF_ASSETS_ENABLED:-false}"
+CF_ASSETS_REQUIRED="${CF_ASSETS_REQUIRED:-false}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -426,9 +428,10 @@ if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
     fi
 fi
 
-# Step 2: Upload to storage backends (parallel)
+# Step 2: Upload to storage backends and the route-free Workers shadow (parallel)
 R2_PID=""
 DO_PID=""
+CF_ASSETS_PID=""
 
 # Start uploads in parallel (line-buffered for clean interleaving)
 UPLOAD_START=$(date +%s)
@@ -443,6 +446,12 @@ if [[ "$DO_ENABLED" == "true" ]]; then
     log "🚀 Starting DO Spaces upload..."
     stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR" &
     DO_PID=$!
+fi
+
+if [[ "$CF_ASSETS_ENABLED" == "true" ]]; then
+    log "🚀 Starting Cloudflare Workers Assets shadow upload (no production route)..."
+    stdbuf -oL "$SCRIPT_DIR/allium-deploy-cfassets.sh" --upload-only &
+    CF_ASSETS_PID=$!
 fi
 
 # Wait for uploads to complete (capture exit codes without triggering set -e)
@@ -474,16 +483,37 @@ if [[ -n "$DO_PID" ]]; then
     fi
 fi
 
+CF_ASSETS_EXIT=0
+if [[ -n "$CF_ASSETS_PID" ]]; then
+    wait "$CF_ASSETS_PID" || CF_ASSETS_EXIT=$?
+    CF_ASSETS_DURATION=$(($(date +%s) - UPLOAD_START))
+    CF_ASSETS_TIME=$(printf '%dm%02ds' $((CF_ASSETS_DURATION/60)) $((CF_ASSETS_DURATION%60)))
+    if [[ "$CF_ASSETS_EXIT" == "0" ]]; then
+        log "✅ Workers Assets shadow upload and verification completed ($CF_ASSETS_TIME)"
+    else
+        log "⚠️ Workers Assets shadow upload failed (exit $CF_ASSETS_EXIT, $CF_ASSETS_TIME)"
+    fi
+fi
+
 # Check if at least one upload succeeded
 if [[ "$UPLOAD_SUCCESS" == "true" ]]; then
     log "✅ Storage uploads completed"
-    reset_failures
 else
     log "❌ All uploads failed"
     increment_failures
     [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
     exit 1
 fi
+
+
+if [[ "$CF_ASSETS_REQUIRED" == "true" && "$CF_ASSETS_EXIT" != "0" ]]; then
+    log "❌ Workers Assets is required but its upload or verification failed"
+    increment_failures
+    [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
+    exit 1
+fi
+
+reset_failures
 
 # Step 3: Purge Cloudflare CDN cache (once, after all uploads)
 purge_cdn
