@@ -256,7 +256,7 @@ repeat these checks on `metrics-next.1aeo.com`, including the stricter
 Worker-generated `noindex, nofollow` value that workers.dev itself normalizes
 to `noindex`.
 
-## Non-production route rehearsal readiness
+## Non-production route rehearsal result
 
 At `2026-07-26T20:32:56Z`, the current Cloudflare API documentation and the
 installed Wrangler 4.86.0 command help were checked against the rehearsal
@@ -265,22 +265,63 @@ runbook. They agree on `POST` and `DELETE` operations under
 the non-interactive deployment form
 `wrangler versions deploy VERSION_ID@100% --yes`.
 
-The exact deployment command was then run with `--dry-run` against the generated
-route-free `wrangler.assets.toml`. Wrangler fetched the live deployment,
-selected verified version `53164b95-f100-4289-8098-a71b92a7950a` at 100%, and
-exited without creating a deployment. It also proved that the dedicated
-Worker's active deployment remains the route-free bootstrap version
-`2678d1f7-b756-40b5-9728-03a630cc7d4b`. The config contains only the expected
-workers.dev and preview-URL settings; it has no zone route or custom domain.
-The latest candidate must be re-verified and substituted for this dry-run
-version immediately before the real rehearsal.
+The exact deployment command was first run with `--dry-run` against the
+generated route-free `wrangler.assets.toml`. After the token was restricted to
+the documented Account / Workers Scripts / Edit, Zone / DNS / Edit, Zone /
+Workers Routes / Edit, and Zone / Zone / Read permissions, live list calls for
+the DNS-record and Workers-route endpoints both succeeded. The preflight found
+no `metrics-next.1aeo.com` record and no zone Worker route.
 
-A direct read-only permission check resolved the `1aeo.com` zone successfully,
-but the exact DNS-record and Workers-route list calls both returned Cloudflare
-authentication error 10000. No DNS record, Worker route, deployment, or custom
-domain mutation was attempted. The live rehearsal therefore remains pending
-until the host's temporary Worker token is replaced with the plan's restricted
-DNS Write and Workers Routes Write permissions.
+At `2026-07-26T22:32:53Z`, immutable version
+`efc84e15-6228-48fd-954c-16dcfce437bf` was reverified against the stable local
+output and deployed at 100% only on the dedicated
+`1aeo-metrics-assets-stage2` Worker. The route-free configuration itself was
+not changed. The rehearsal then created one temporary proxied `A` record for
+`metrics-next.1aeo.com` at reserved address `192.0.2.0` and one exact
+`metrics-next.1aeo.com/*` route to that Worker. No production record, Pages
+domain, route, or hostname was mutated.
+
+Initial record creation exposed expected DNS propagation behavior: the hosted
+recursive resolver briefly alternated between NXDOMAIN, the originless
+placeholder, and Cloudflare anycast. The gate therefore required three
+consecutive public DNS/TLS requests serving the exact root hash, then pinned
+the resulting Cloudflare edge address for content verification so transient
+recursive-cache state could not be mistaken for a Worker failure. This did not
+bypass TLS, the hostname route, or Cloudflare; it removed only repeated DNS
+resolution from the remaining bounded checks.
+
+The full route verifier passed three consecutive times from LAS. A separate
+SJC run matched the same exact SHA-256 values:
+
+| Representative route | SHA-256 |
+|---|---|
+| `/` | `7bdc557cdc876db8d0368b87f9cad2a211a7f21279cb258e69646d2bb2ff4451` |
+| `/search-index.json` | `cb122b8a115d4b1eef582ba79bf1f86d71af7a2c8766cfcac6ccc5c70e2d2132` |
+| `/1aeo.com/` | `32250494b6ebb952d2c26b867d1029bb9921cc329c3a3294afcf0d8be3d56e90` |
+| `/flag/running/` | `2df8d535344b3aec2dfb0b7095859399e743839e68e2fc5118789c92a02ea0c3` |
+
+Both colos returned HTTP 200 for browser and `GPTBot/1.0` user agents, the
+custom missing probe returned 404, `/index.html` returned the expected 307
+canonical redirect, and server-side search returned the version-matched 302
+relay redirect. Static and Worker-generated search responses returned exact
+`X-Robots-Tag: noindex, nofollow`; production continued to omit that header.
+The intended security headers and `CF-Ray` were present. Two static requests
+returned `CF-Cache-Status: HIT`, the exact
+`Cache-Control: public, max-age=0, must-revalidate`, and a stable ETag; a
+matching `If-None-Match` request returned 304. No purge was run before or after
+the rehearsal.
+
+Rollback deleted the exact route ID and confirmed its absence through the API.
+The first immediate pinned-edge request still served the Worker, proving route
+withdrawal is eventually consistent rather than instantaneous. The final gate
+therefore polled until that same edge stopped serving the Worker asset, then
+deleted only the exact temporary DNS record and confirmed its absence. A final
+pre/post comparison found production DNS, Pages project and canonical
+deployment state, all Worker routes, and representative production status,
+hashes, redirects, and indexing headers byte-for-byte unchanged. The
+`workers.dev` alias remains available for review. Bounded evidence is retained
+at `/home/aeo1/stage2-route-rehearsal-20260726T223253Z`; duplicate source files
+and failed-attempt scratch directories were removed.
 
 ## Complete scheduled-job evidence
 
@@ -345,12 +386,12 @@ not reset them.
   regression, or unexplained size/count growth.
 - [x] Representative checks pass from both the hosted LAS path and a second
   Cloudflare colo.
-- [ ] `metrics-next.1aeo.com` rehearses the exact zone-level route, TLS,
+- [x] `metrics-next.1aeo.com` rehearses the exact zone-level route, TLS,
   redirects, WAF behavior, caching, search, and rollback.
-- [ ] Rehearsal hostname remains `noindex`.
-- [ ] Rehearsal route is removed after the rollback test, with the shadow
+- [x] Rehearsal hostname remains `noindex`.
+- [x] Rehearsal route is removed after the rollback test, with the shadow
   `workers.dev` alias retained for review.
-- [ ] Production DNS, Pages domain, and `metrics.1aeo.com` route remain
+- [x] Production DNS, Pages domain, and `metrics.1aeo.com` route remain
   unchanged.
 - [ ] Final Stage 1–2 evidence committed for review before Stage 3.
 
@@ -361,6 +402,8 @@ not reset them.
 - Consecutive counter: `logs/cfassets-shadow-consecutive-successes`
 - Last verified version: `logs/cfassets-last-version`
 - Main update log: `logs/update.log`
+- Bounded route-rehearsal evidence:
+  `/home/aeo1/stage2-route-rehearsal-20260726T223253Z`
 - Unit/integration tests: `tests/`
 
 The host log and counter files are runtime evidence and are intentionally not
