@@ -371,6 +371,58 @@ production soak. The first four valid builds remain in the same consecutive
 segment; changing this evidence threshold does not change runtime code and does
 not reset them.
 
+## Final 10-build scheduled soak result
+
+The final-code soak completed at `2026-07-27T00:26:18Z`. The strict read-only
+gate, `node scripts/audit-cfassets-soak.js --require-complete`, returned
+`ok: true`, `current: 10`, `target: 10`, `complete: true`, and an empty error
+list. The accepted suffix contains exactly these 10 scheduled jobs:
+
+| # | Scheduled start UTC | Whole-job finish UTC | Whole job (seconds) | Worker upload + verification (seconds) | Worker version | Asset files | Prepared bytes |
+|---:|---|---|---:|---:|---|---:|---:|
+| 1 | `2026-07-26T19:45:01Z` | `2026-07-26T19:57:14Z` | 733 | 345 | `f747c2c0-312e-4bee-830b-2d17de468c70` | 29,675 | 4,656,928,482 |
+| 2 | `2026-07-26T20:15:01Z` | `2026-07-26T20:29:38Z` | 877 | 485 | `53164b95-f100-4289-8098-a71b92a7950a` | 29,669 | 4,656,765,442 |
+| 3 | `2026-07-26T20:45:01Z` | `2026-07-26T21:02:21Z` | 1,040 | 464 | `23bec078-6061-40c5-a3c6-4a09fa4ec0ac` | 29,759 | 4,628,451,832 |
+| 4 | `2026-07-26T21:15:01Z` | `2026-07-26T21:28:53Z` | 832 | 482 | `6d320cc9-c814-4ae6-81e5-ccf82f2d080b` | 29,745 | 4,582,810,120 |
+| 5 | `2026-07-26T21:45:01Z` | `2026-07-26T21:57:01Z` | 720 | 337 | `56def22d-09b6-4e76-9574-105573e9d1fb` | 29,745 | 4,582,700,583 |
+| 6 | `2026-07-26T22:15:01Z` | `2026-07-26T22:27:10Z` | 729 | 366 | `efc84e15-6228-48fd-954c-16dcfce437bf` | 29,735 | 4,556,442,744 |
+| 7 | `2026-07-26T22:45:01Z` | `2026-07-26T22:57:20Z` | 739 | 370 | `37cadc8f-dbfd-4d7c-a8cc-87464b6cb259` | 29,735 | 4,556,205,717 |
+| 8 | `2026-07-26T23:15:01Z` | `2026-07-26T23:27:52Z` | 771 | 435 | `55ecfa99-5215-40dd-8004-7c48dc277283` | 29,669 | 4,460,244,508 |
+| 9 | `2026-07-26T23:45:01Z` | `2026-07-26T23:57:15Z` | 734 | 409 | `c8910bc1-195c-4bc1-8717-5e01dc6e98a7` | 29,669 | 4,460,019,378 |
+| 10 | `2026-07-27T00:15:01Z` | `2026-07-27T00:26:18Z` | 677 | 347 | `9d3940e5-6052-48cd-bc91-a673d3eab566` | 29,693 | 4,492,216,083 |
+
+Every whole-job row has original exit status 0, cadence result `true`, and the
+expected sequential counter. Starts alternate exactly between the host's
+`:15` and `:45` cron entries without a missed slot. All version IDs are unique.
+Whole jobs ranged from 677 to 1,040 seconds, leaving at least 760 seconds before
+the next 30-minute slot. Worker upload plus verification ranged from 337 to 485
+seconds.
+
+Asset counts ranged from 29,669 to 29,759, safely below the 100,000-file
+platform ceiling. Prepared bytes ranged from 4,460,019,378 to 4,656,928,482.
+The largest adjacent file-count change was 0.3033469278%, and the largest
+adjacent prepared-byte change was 2.1061649750%; both are well inside the 10%
+investigation threshold and follow the changing generated source data rather
+than a deployment discontinuity.
+
+Every candidate ultimately passed three consecutive complete representative
+checks against its version-matched output. Some candidates initially observed
+the already-documented, bounded alias propagation window; those transient
+retries did not count as passes. No candidate ended with an unresolved hash,
+missing-asset, header, redirect, 404, or search regression, and no candidate
+reset the streak.
+
+After the tenth build, the full 14-test suite passed. The production checkout
+was clean and exactly aligned with `origin/main`. Live control-plane checks
+again found zero zone Worker routes and zero `metrics-next.1aeo.com` DNS
+records. The generated Worker configuration contained no `route`, `routes`,
+or `custom_domain` key; `CF_ASSETS_REQUIRED=false` and
+`CF_ASSETS_ALLOW_PROMOTION=false` remained set. Production root returned HTTP
+200 from `digitalocean-spaces`, had no `X-Robots-Tag`, and retained the proxied
+`metrics.1aeo.com` CNAME to `1aeo-metrics.pages.dev`. The route-free shadow
+alias returned HTTP 200 with `X-Robots-Tag: noindex`. Stage 3 production
+traffic was not enabled.
+
 ## Stage 2 completion gates
 
 - [x] Feature branch reviewed, committed, pushed, and fast-forwarded to
@@ -380,10 +432,10 @@ not reset them.
   verified.
 - [x] Scheduled shadow publication enabled with
   `CF_ASSETS_REQUIRED=false`.
-- [ ] At least 10 consecutive scheduled candidate builds pass.
-- [ ] No candidate exceeds the generation interval.
-- [ ] No candidate hash mismatch, missing representative asset, search
-  regression, or unexplained size/count growth.
+- [x] At least 10 consecutive scheduled candidate builds pass.
+- [x] No candidate exceeds the generation interval.
+- [x] No candidate ends with an unresolved hash mismatch, missing
+  representative asset, search regression, or unexplained size/count growth.
 - [x] Representative checks pass from both the hosted LAS path and a second
   Cloudflare colo.
 - [x] `metrics-next.1aeo.com` rehearses the exact zone-level route, TLS,
@@ -393,7 +445,7 @@ not reset them.
   `workers.dev` alias retained for review.
 - [x] Production DNS, Pages domain, and `metrics.1aeo.com` route remain
   unchanged.
-- [ ] Final Stage 1–2 evidence committed for review before Stage 3.
+- [x] Final Stage 1–2 evidence committed for review before Stage 3.
 
 ## Evidence locations
 

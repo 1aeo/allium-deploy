@@ -601,10 +601,10 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] Static routing, directory handling, custom 404, and headers verified.
 - [x] Still-fresh five-minute cached asset update verified without purge.
 - [x] Preview-only full version upload and multi-colo hash gate verified.
-- [ ] Stage 1 code reviewed, tested, committed, and deployed in shadow-only mode.
-- [ ] At least 10 consecutive shadow builds pass.
-- [ ] Non-production hostname route rehearsal passes.
-- [ ] Production candidate passes preview health gate.
+- [x] Stage 1 code reviewed, tested, committed, and deployed in shadow-only mode.
+- [x] At least 10 consecutive shadow builds pass.
+- [x] Non-production hostname route rehearsal passes.
+- [x] Production candidate passes preview health gate.
 - [ ] Production switches 100% to the Worker route.
 - [ ] Immediate two-hour production checks pass.
 - [ ] Seven-day production soak passes with current R2 frequency unchanged.
