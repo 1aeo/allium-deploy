@@ -1,7 +1,7 @@
 # Allium Workers Static Assets Migration Plan
 
-**Status:** Approved plan; Stages 1–2 execution is in progress; Stage 3 remains
-blocked on review
+**Status:** Approved plan; Stages 1–3 are complete; Stage 4 remains blocked on
+review
 
 **Approved:** 2026-07-26
 
@@ -16,6 +16,10 @@ blocked on review
 Stage 1–2 measurements, safety findings, soak counters, and route-rehearsal
 evidence are tracked in
 [`WORKERS_STATIC_ASSETS_STAGE1_STAGE2_EXECUTION.md`](WORKERS_STATIC_ASSETS_STAGE1_STAGE2_EXECUTION.md).
+
+The production cutover, two-hour gate, bounded invocation experiment, and
+post-cutover control-plane state are tracked in
+[`WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md`](WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md).
 
 ## Decisions that apply to every stage
 
@@ -445,6 +449,22 @@ Rollback immediately on:
 
 Do not purge during or after Workers version activation. The completed cache experiment proved version activation replaces still-fresh content without a purge.
 
+### Stage 3 execution status
+
+Stage 3 completed successfully on `2026-07-27`. The exact immutable version
+`2e0e4acb-f737-411f-9e76-8affdb2d45db` is deployed at 100%, and route
+`metrics.1aeo.com/*` sends production traffic to the dedicated Workers Static
+Assets service. Three consecutive immediate checks and the 5-, 15-, 30-, 60-,
+and 120-minute checks passed through both SJC and LAS. The full bounded result
+is in the
+[`Stage 3 execution record`](WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md).
+
+Stage 4 has not started. Production remains pinned to that verified candidate;
+scheduled builds upload and verify new shadow candidates without promoting
+them because `CF_ASSETS_REQUIRED=false` and
+`CF_ASSETS_ALLOW_PROMOTION=false` remain set. Pages, its purge pipeline, DO,
+and R2 remain current behind the route, and DO/R2 continue every build.
+
 ## Stage 4 — Production soak with all current redundancy retained
 
 Keep production on Workers for seven days before changing R2 frequency.
@@ -605,8 +625,8 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] At least 10 consecutive shadow builds pass.
 - [x] Non-production hostname route rehearsal passes.
 - [x] Production candidate passes preview health gate.
-- [ ] Production switches 100% to the Worker route.
-- [ ] Immediate two-hour production checks pass.
+- [x] Production switches 100% to the Worker route.
+- [x] Immediate two-hour production checks pass.
 - [ ] Seven-day production soak passes with current R2 frequency unchanged.
 - [ ] R2 live synchronization changes to daily with retry-safe markers.
 - [ ] Pages rollback window completes.
