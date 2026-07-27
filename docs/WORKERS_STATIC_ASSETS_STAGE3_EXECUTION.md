@@ -284,6 +284,33 @@ The final Stage 3 control-plane audit at `2026-07-27T07:04:01Z` found:
 - [x] No rollback condition occurred and no purge was used for Worker
   activation.
 
+## Repository and post-push verification
+
+After the execution record was fast-forwarded to the production checkout and
+pushed to GitHub, the complete 14-test Node suite passed. `git diff --check`
+passed, the hosted checkout was clean, and its `main` and `origin/main` refs
+were aligned. The commit author and committer identity was
+`1aeo <github@1aeo.com>`.
+
+At `2026-07-27T07:12:12Z` and `07:12:13Z`, the complete production verifier
+passed once more through SJC and LAS respectively. All four frozen hashes,
+cache and security headers, ETag revalidation, redirects, search, custom 404,
+indexing behavior, and GPTBot status still matched the accepted candidate.
+
+The final Cloudflare API read confirmed:
+
+- The route list contains exactly route
+  `fd0972982982407694b039c23e498258`, pattern `metrics.1aeo.com/*`, targeting
+  `1aeo-metrics-assets-stage2`, with request-limit fail-open disabled.
+- DNS record `849a2f2f09b433df5e325efb0828bf96` remains the same proxied CNAME to
+  `1aeo-metrics.pages.dev` with automatic TTL.
+- The latest deployment remains
+  `9037ea23-c75c-4fe1-b77a-07e50574cc34`, created by Wrangler, containing
+  exactly version `2e0e4acb-f737-411f-9e76-8affdb2d45db@100%`.
+- The Stage 4 gates remain disabled:
+  `CF_ASSETS_REQUIRED=false` and
+  `CF_ASSETS_ALLOW_PROMOTION=false`.
+
 ## Stop point before Stage 4
 
 Stage 3 is complete, but the system is deliberately not yet in its intended
