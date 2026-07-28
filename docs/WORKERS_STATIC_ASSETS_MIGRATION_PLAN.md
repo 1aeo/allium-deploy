@@ -1,7 +1,7 @@
 # Allium Workers Static Assets Migration Plan
 
-**Status:** Approved plan; Stages 1–3 are complete; Stage 4 automatic-promotion
-readiness is being finalized before the seven-day soak
+**Status:** Approved plan; Stages 1–3 are complete; the Stage 4 seven-day
+production soak is active from `2026-07-28T02:56:35Z`
 
 **Approved:** 2026-07-26
 

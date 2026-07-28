@@ -12,6 +12,10 @@ DigitalOcean, R2, purge, backup, or retention architecture.
 
 **Production checkout:** `/home/aeo1/allium-deploy` on `hostedopen`
 
+**Readiness status:** Complete. The seven-day production soak is active from
+`2026-07-28T02:56:35Z` and cannot complete before
+`2026-08-04T02:56:35Z`.
+
 ## Activation boundary
 
 Stage 4 starts only when a scheduled job completes all of these operations:
@@ -30,6 +34,72 @@ Merely setting the feature gates does not start the seven-day soak. The soak
 clock begins at the first successful automatic production deployment recorded
 in `logs/cfassets-promotion-summary.tsv` and confirmed through Cloudflare's
 deployment API.
+
+## First scheduled automatic promotion
+
+The first enabled Stage 4 job began from the real `:45` cron entry at
+`2026-07-28T02:45:01Z`. It ran corrected commit
+`007e40e54c7ed69dd8b18bb93ea572b04fb5a070`, whose author and committer are
+both `1aeo <github@1aeo.com>`, with these host-only controls:
+
+```text
+CF_ASSETS_ENABLED=true
+CF_ASSETS_REQUIRED=true
+CF_ASSETS_ALLOW_PROMOTION=true
+PAGES_PURGE_URL=https://1aeo-metrics.pages.dev
+```
+
+Generation completed normally, then DO, R2, and Workers received the same
+stable tree. The immutable Worker result was:
+
+| Measurement | Result |
+|---|---:|
+| Verified version | `7e69dc8b-1800-430c-920d-21ab7d272800` |
+| Worker upload plus verification | 488 seconds |
+| Asset files | 29,473 |
+| Prepared bytes | 4,451,771,979 |
+| Changed assets uploaded by Wrangler | 29,074 |
+| Account-level assets reused | 399 |
+| Consecutive verified candidates | 13 |
+
+The first preview attempt observed the already documented alias-propagation
+hash mismatch. No promotion occurred. The next three complete attempts passed
+consecutively, after which the script wrote that exact UUID to the verified
+version file.
+
+At `2026-07-28T02:56:35Z`, Wrangler deployed only
+`7e69dc8b-1800-430c-920d-21ab7d272800@100%` in 0.38 seconds. The bounded
+promotion row recorded exit status 0. Cloudflare's deployment API independently
+reported deployment `430cce99-cb5f-4328-a78a-dee84668c909`, created at
+`2026-07-28T02:56:35.052887Z`, containing exactly that one version at 100%.
+
+Production through LAS and SJC matched the same generated output:
+
+| Representative route | SHA-256 |
+|---|---|
+| `/` | `1e575b2fd1db8286362a864db4f52e26eba6d325a0ea80fc8bd0588cef3373c5` |
+| `/search-index.json` | `256e12673dc58c1bcba1d1e40bb398bfbb5d6f398f9cfe70e8ebf460c34b72b0` |
+| `/1aeo.com/` | `df9be5497c465b85ad503f344f7484b3382835135b5b34e58bc3fa574f630efa` |
+| `/flag/running/` | `d8a8657176b1899183af426ada253162b202bdd05999eca5a281a7185a43192b` |
+
+Both colos returned status 200, `CF-Cache-Status: HIT`, exact
+`Cache-Control: public, max-age=0, must-revalidate`, and ETag
+`"53e264bb5cae45a87ecaecb0477c3090"`. Production omitted both the legacy
+source marker and `X-Robots-Tag`. Search returned 302, the custom missing probe
+returned 404, and `GPTBot/1.0` returned 200.
+
+The production route remained exactly
+`fd0972982982407694b039c23e498258`, pattern `metrics.1aeo.com/*`, targeting
+`1aeo-metrics-assets-stage2`, with request-limit fail-open disabled. DNS record
+`849a2f2f09b433df5e325efb0828bf96` remained the same proxied CNAME to
+`1aeo-metrics.pages.dev`.
+
+The corrected Pages purge endpoint returned no 405 responses and deleted three
+matching HTML cache entries. The complete job ended at
+`2026-07-28T02:59:13Z` with exit status 0 in 852 seconds, inside the 1,800-second
+cadence. The whole-job counter advanced to 13. This successful job and the
+independent production checks start the Stage 4 seven-day clock at the
+deployment timestamp, `2026-07-28T02:56:35Z`.
 
 ## Corrected promotion implementation
 
@@ -180,10 +250,10 @@ and DNS state before the seven-day soak is considered active.
 - [x] GitHub required CI includes the complete behavior suite.
 - [x] Pages rollback purge bypasses the Worker route and retains absolute
   production-host cache keys.
-- [ ] Corrected commit is pushed as `1aeo` and required GitHub checks pass.
-- [ ] `hostedopen` is clean and exactly aligned with corrected `origin/main`.
-- [ ] Stage 4 feature gates are enabled on the corrected checkout.
-- [ ] First scheduled automatic promotion succeeds and matches production.
+- [x] Corrected commit is pushed as `1aeo` and required GitHub checks pass.
+- [x] `hostedopen` is clean and exactly aligned with corrected `origin/main`.
+- [x] Stage 4 feature gates are enabled on the corrected checkout.
+- [x] First scheduled automatic promotion succeeds and matches production.
 - [ ] Seven-day production soak completes with DO/R2 every-build redundancy.
 
 Stage 5 remains blocked until the final checklist item completes.
