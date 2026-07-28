@@ -224,6 +224,43 @@ The tagged cron entry removes itself after the attempt whether the audit passes
 or fails. Host configuration remains mode `600` with
 `R2_CONTENT_SYNC_INTERVAL=every-build`.
 
+### Scheduled pass-gated activation
+
+A second one-shot user cron entry is scheduled for
+`2026-07-29T03:35:00Z` (`2026-07-28 20:35 PDT`). It runs
+`scripts/run-stage5-24h-activation.sh` with
+`STAGE5_REUSE_AUDIT=true`. The runner accepts only a fresh audit that began
+after the formal checkpoint, contains no failed check, and ended with exactly
+`failures=0`.
+
+The activation runner then:
+
+1. Requires a clean production checkout exactly aligned with `origin/main`.
+2. Waits for the active normal deployment to release
+   `/tmp/allium-deploy.lock` and proceeds only when at least 900 seconds remain
+   before the next `:15` or `:45` Allium start. It can wait through later jobs
+   for up to two hours rather than collide with the normal scheduler.
+3. Atomically changes only `R2_CONTENT_SYNC_INTERVAL=every-build` to `daily`,
+   preserving the mode of `config.env`.
+4. Runs one explicit `--force-content-sync`, requires the complete R2 count,
+   byte, and representative-hash gate, and checks the UTC daily marker.
+5. Releases the deployment lock and waits for the next normal cron job to
+   complete.
+6. Requires that job to skip only R2 live content while DO mirroring, Workers
+   candidate upload and preview verification, exact-version promotion, Pages
+   rollback purge, whole-job success, and the bounded Stage 4 audit all pass.
+7. Rechecks production statuses, search, custom 404, GPTBot access, and root
+   and search-index hashes.
+8. Restores `every-build` automatically if any operational check after the
+   cadence change fails.
+9. Writes bounded activation evidence, commits it as
+   `1aeo <github@1aeo.com>`, and retries the direct `origin/main` push up to
+   three times. A push-only failure does not roll back a fully verified healthy
+   daily cadence and is left clearly recorded for Git recovery.
+
+Both one-shot entries remove themselves after their attempt. Neither runner
+changes routes, DNS, Pages, purge behavior, backup cadence, or retention.
+
 At or after `2026-07-29T02:56:35Z`:
 
 1. Run `pnpm audit:cfassets-stage4 -- --started
