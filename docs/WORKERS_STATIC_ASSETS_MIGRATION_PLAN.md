@@ -463,21 +463,24 @@ and 120-minute checks passed through both SJC and LAS. The full bounded result
 is in the
 [`Stage 3 execution record`](WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md).
 
-Stage 4 has not started. Production remains pinned to that verified candidate;
-scheduled builds upload and verify new shadow candidates without promoting
-them because `CF_ASSETS_REQUIRED=false` and
-`CF_ASSETS_ALLOW_PROMOTION=false` remain set. Pages, its purge pipeline, DO,
-and R2 remain current behind the route, and DO/R2 continue every build.
+Stage 4 started at `2026-07-28T02:56:35Z`. Scheduled builds now upload,
+verify, and promote only the exact verified immutable candidate at 100% with
+`CF_ASSETS_REQUIRED=true` and `CF_ASSETS_ALLOW_PROMOTION=true`. Pages, its
+purge pipeline, DO, and R2 remain current behind the route, and DO/R2 continue
+every build until the separate Stage 5 gate passes.
 
 The separately reviewed Stage 4 implementation and activation evidence is
 tracked in the
 [`Stage 4 readiness record`](WORKERS_STATIC_ASSETS_STAGE4_READINESS.md). The
-seven-day clock starts only after the first successful scheduled automatic
-promotion is recorded and independently verified in production.
+Stage 5 and seven-day rollback clocks start only after the first successful
+scheduled automatic promotion is recorded and independently verified in
+production.
 
 ## Stage 4 — Production soak with all current redundancy retained
 
-Keep production on Workers for seven days before changing R2 frequency.
+Keep production on Workers with all current redundancy for at least 24 hours
+before changing R2 frequency. Continue the production soak for seven days
+before retiring Pages, its purge path, or any rollback infrastructure.
 
 During this soak:
 
@@ -502,9 +505,54 @@ The Workers deployment becomes a required success at this stage:
 
 Do not automatically replace a healthy Worker version merely because a DO or R2 mirror upload failed. Cloudflare candidate success plus preview health controls Worker promotion; mirror failures are reported and retried separately.
 
+### Split acceptance gates
+
+Stage 5 may begin after the first 24 hours rather than waiting seven days only
+if all of these conditions pass:
+
+- At least 48 consecutive scheduled Stage 4 jobs completed successfully.
+- Every job stayed within the 1,800-second scheduler interval.
+- Every job produced one unique verified candidate and promoted exactly that
+  version at 100% with exit status 0.
+- At least 86,400 seconds elapsed after the first successful automatic
+  promotion.
+- Production representative HTML and search requests, redirect, custom 404,
+  cache/security headers, and AI indexing behavior remain healthy.
+- No Pages purge 405 or other rollback-target refresh failure recurred.
+- DO and R2 live mirrors match the generated output, and at least one daily
+  backup cycle succeeded.
+- Worker invocation volume and Cloudflare billing show no unexpected static
+  request regression.
+
+Run the bounded log portion of this decision with:
+
+```bash
+pnpm audit:cfassets-stage4 -- --started 2026-07-28T02:45:01Z \
+  --minimum-jobs 48 --minimum-elapsed-seconds 86400 --require-complete
+```
+
+The script correlates each scheduled job, verified immutable candidate, and
+promotion; requires matching version IDs, zero statuses, unique versions,
+30-minute scheduler continuity, and bounded durations; and emits only a small
+JSON report. The production, mirror, backup, purge, invocation, and billing
+checks remain explicit acceptance checks because they are not all represented
+in those three bounded TSV summaries.
+
+Passing the 24-hour gate authorizes only the reversible Stage 5 R2-cadence
+change. The Stage 4 production soak continues through at least
+`2026-08-04T02:56:35Z`. Stage 6 remains blocked until that seven-day gate
+passes, and the Pages project should preferably remain available without
+production traffic for a 14–30-day rollback window before archival.
+
 ## Stage 5 — Change R2 live replication to daily
 
-Only after the production soak passes should the live R2 sync move from every build to daily.
+Only after the 24-hour split acceptance gate passes should the live R2 sync
+move from every build to daily. This change does not end the seven-day Stage 4
+production observation window.
+
+Implementation, test evidence, activation checks, rollback, and the remaining
+path to completion are tracked in the
+[`Stage 5 execution record`](WORKERS_STATIC_ASSETS_STAGE5_EXECUTION.md).
 
 The existing `DAILY_R2_BACKUP` flag controls backup creation only. It does not stop `upload_content` from synchronizing the live R2 bucket every 30 minutes. Therefore, add separate behavior:
 
@@ -637,8 +685,11 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] Production candidate passes preview health gate.
 - [x] Production switches 100% to the Worker route.
 - [x] Immediate two-hour production checks pass.
-- [ ] Seven-day production soak passes with current R2 frequency unchanged.
+- [ ] First 24 production hours and at least 48 Stage 4 jobs pass the split
+  acceptance gate with current R2 frequency unchanged.
 - [ ] R2 live synchronization changes to daily with retry-safe markers.
+- [ ] Seven-day production soak passes before Pages or rollback machinery is
+  retired.
 - [ ] Pages rollback window completes.
 - [ ] Pages catch-all and purge path retire.
 - [ ] Worker Custom Domain becomes the permanent origin.

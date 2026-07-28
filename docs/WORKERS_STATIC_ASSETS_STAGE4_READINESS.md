@@ -12,8 +12,10 @@ DigitalOcean, R2, purge, backup, or retention architecture.
 
 **Production checkout:** `/home/aeo1/allium-deploy` on `hostedopen`
 
-**Readiness status:** Complete. The seven-day production soak is active from
-`2026-07-28T02:56:35Z` and cannot complete before
+**Readiness status:** Complete. The production soak is active from
+`2026-07-28T02:56:35Z`. The reversible Stage 5 R2-cadence decision may be made
+after its strict 24-hour/48-job gate; Pages and rollback retirement cannot
+begin before the seven-day observation window ends at
 `2026-08-04T02:56:35Z`.
 
 ## Activation boundary
@@ -254,6 +256,10 @@ and DNS state before the seven-day soak is considered active.
 - [x] `hostedopen` is clean and exactly aligned with corrected `origin/main`.
 - [x] Stage 4 feature gates are enabled on the corrected checkout.
 - [x] First scheduled automatic promotion succeeds and matches production.
-- [ ] Seven-day production soak completes with DO/R2 every-build redundancy.
+- [ ] First 24 hours and at least 48 scheduled Stage 4 jobs pass every split
+  acceptance check before Stage 5 changes R2 cadence.
+- [ ] Seven-day production soak completes before Pages or other rollback
+  infrastructure is retired.
 
-Stage 5 remains blocked until the final checklist item completes.
+Stage 5 remains blocked until the 24-hour checklist item completes. Stage 6
+remains blocked until the final seven-day checklist item completes.
