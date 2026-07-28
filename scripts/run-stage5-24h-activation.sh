@@ -352,7 +352,7 @@ if (( $(date +%s) < checkpoint_epoch )); then
     exit 1
 fi
 [[ -f "$CONFIG_FILE" ]] || { log "ERROR: config.env is missing"; exit 1; }
-[[ -x "$AUDIT_SCRIPT" ]] || { log "ERROR: acceptance audit is not executable"; exit 1; }
+[[ -r "$AUDIT_SCRIPT" ]] || { log "ERROR: acceptance audit is not readable"; exit 1; }
 [[ "$(config_interval)" == every-build ]] || {
     log "ERROR: R2 cadence is not every-build before the acceptance audit"
     exit 1
