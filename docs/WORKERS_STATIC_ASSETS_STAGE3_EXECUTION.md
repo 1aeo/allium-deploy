@@ -332,3 +332,14 @@ Stage 4 requires a separately reviewed implementation and activation of:
 
 No Stage 4, R2-daily, Pages-retirement, custom-domain, cleanup, retention, or
 non-Allium change is included in this execution record.
+
+### Post-Stage 3 rollback-purge correction
+
+The Stage 4 readiness audit later confirmed that, although the Pages purge
+code and secret remained configured, POST requests through
+`metrics.1aeo.com/_purge` returned HTTP 405 after the Worker route became
+active. This did not affect Worker content, version activation, or the Stage 3
+acceptance checks, but it meant the dormant Pages cache was not being actively
+purged as originally stated. Stage 4 corrects the endpoint to the canonical
+Pages hostname while retaining absolute production-host cache keys. See the
+[`Stage 4 readiness record`](WORKERS_STATIC_ASSETS_STAGE4_READINESS.md).

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Upload and verify an Allium Workers Static Assets version without changing
-# production traffic. Promotion is guarded and disabled throughout Stages 1–2.
+# Upload and verify an immutable Allium Workers Static Assets version. Optional
+# promotion is a separate, guarded action that accepts only the last version
+# written after successful preview verification.
 
 set -euo pipefail
 
@@ -32,6 +33,7 @@ CF_ASSETS_ENV_OVERRIDES=(
     CF_ASSETS_CONSECUTIVE_FILE
     CF_ASSETS_LAST_VERSION_FILE
     CF_ASSETS_SUMMARY_FILE
+    CF_ASSETS_PROMOTION_SUMMARY_FILE
     CF_ASSETS_REQUIRE_FRESH_CHECKOUT
     CF_ASSETS_VERIFY_ATTEMPTS
     CF_ASSETS_VERIFY_MAX_ATTEMPTS
@@ -61,6 +63,7 @@ CF_ASSETS_VERIFY_SCRIPT="${CF_ASSETS_VERIFY_SCRIPT:-$SCRIPT_DIR/allium-deploy-ve
 CF_ASSETS_CONSECUTIVE_FILE="${CF_ASSETS_CONSECUTIVE_FILE:-$DEPLOY_DIR/logs/cfassets-shadow-consecutive-successes}"
 CF_ASSETS_LAST_VERSION_FILE="${CF_ASSETS_LAST_VERSION_FILE:-$DEPLOY_DIR/logs/cfassets-last-version}"
 CF_ASSETS_SUMMARY_FILE="${CF_ASSETS_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-shadow-summary.tsv}"
+CF_ASSETS_PROMOTION_SUMMARY_FILE="${CF_ASSETS_PROMOTION_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-promotion-summary.tsv}"
 
 export CF_ASSETS_VERIFY_ATTEMPTS="${CF_ASSETS_VERIFY_ATTEMPTS:-3}"
 export CF_ASSETS_VERIFY_MAX_ATTEMPTS="${CF_ASSETS_VERIFY_MAX_ATTEMPTS:-12}"
@@ -69,6 +72,19 @@ export CF_ASSETS_VERIFY_CURL_TIMEOUT="${CF_ASSETS_VERIFY_CURL_TIMEOUT:-60}"
 
 log() {
     printf '[CF-Assets] %s\n' "$1"
+}
+
+assert_boolean_setting() {
+    local name="$1"
+    local value="$2"
+
+    case "$value" in
+        true|false) return 0 ;;
+        *)
+            log "invalid $name=$value; expected true or false"
+            return 2
+            ;;
+    esac
 }
 
 assert_safe_worker_name() {
@@ -174,6 +190,36 @@ run_wrangler() {
     )
 }
 
+promote_verified_version() {
+    local version_to_promote=""
+    local promotion_status=0
+
+    if [[ ! -f "$CF_ASSETS_LAST_VERSION_FILE" ]]; then
+        log "verified version file is missing: $CF_ASSETS_LAST_VERSION_FILE"
+        return 1
+    fi
+
+    version_to_promote=$(<"$CF_ASSETS_LAST_VERSION_FILE")
+    if [[ ! "$version_to_promote" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        log "verified version file does not contain one valid Worker version ID"
+        return 1
+    fi
+
+    log "deploying verified version $version_to_promote@100%"
+    run_wrangler versions deploy "$version_to_promote@100%" --yes --config "$CF_ASSETS_CONFIG" \
+        || promotion_status=$?
+
+    mkdir -p "$(dirname "$CF_ASSETS_PROMOTION_SUMMARY_FILE")"
+    if [[ ! -f "$CF_ASSETS_PROMOTION_SUMMARY_FILE" ]]; then
+        printf 'timestamp_utc\tversion_id\texit_status\n' > "$CF_ASSETS_PROMOTION_SUMMARY_FILE"
+    fi
+    printf '%s\t%s\t%s\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$version_to_promote" "$promotion_status" \
+        >> "$CF_ASSETS_PROMOTION_SUMMARY_FILE"
+
+    return "$promotion_status"
+}
+
 record_failure() {
     local status="$1"
     if [[ "$status" -ne 0 && "$MODE" == "--upload-only" ]]; then
@@ -184,6 +230,8 @@ record_failure() {
 
 trap 'record_failure $?' EXIT
 
+assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
+assert_boolean_setting CF_ASSETS_ALLOW_PROMOTION "$CF_ASSETS_ALLOW_PROMOTION"
 assert_safe_worker_name
 generate_config
 
@@ -199,8 +247,7 @@ if [[ "$MODE" == "--promote" ]]; then
     }
     assert_fresh_checkout
     load_cloudflare_token
-    log "promotion was explicitly enabled"
-    run_wrangler versions deploy --config "$CF_ASSETS_CONFIG"
+    promote_verified_version
     exit 0
 fi
 

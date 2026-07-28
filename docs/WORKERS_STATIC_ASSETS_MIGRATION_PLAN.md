@@ -1,7 +1,7 @@
 # Allium Workers Static Assets Migration Plan
 
-**Status:** Approved plan; Stages 1–3 are complete; Stage 4 remains blocked on
-review
+**Status:** Approved plan; Stages 1–3 are complete; Stage 4 automatic-promotion
+readiness is being finalized before the seven-day soak
 
 **Approved:** 2026-07-26
 
@@ -20,6 +20,10 @@ evidence are tracked in
 The production cutover, two-hour gate, bounded invocation experiment, and
 post-cutover control-plane state are tracked in
 [`WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md`](WORKERS_STATIC_ASSETS_STAGE3_EXECUTION.md).
+
+The guarded automatic-promotion implementation, failure matrix, activation
+controls, tests, and seven-day soak boundary are tracked in
+[`WORKERS_STATIC_ASSETS_STAGE4_READINESS.md`](WORKERS_STATIC_ASSETS_STAGE4_READINESS.md).
 
 ## Decisions that apply to every stage
 
@@ -464,6 +468,12 @@ scheduled builds upload and verify new shadow candidates without promoting
 them because `CF_ASSETS_REQUIRED=false` and
 `CF_ASSETS_ALLOW_PROMOTION=false` remain set. Pages, its purge pipeline, DO,
 and R2 remain current behind the route, and DO/R2 continue every build.
+
+The separately reviewed Stage 4 implementation and activation evidence is
+tracked in the
+[`Stage 4 readiness record`](WORKERS_STATIC_ASSETS_STAGE4_READINESS.md). The
+seven-day clock starts only after the first successful scheduled automatic
+promotion is recorded and independently verified in production.
 
 ## Stage 4 — Production soak with all current redundancy retained
 

@@ -122,6 +122,45 @@ Safety properties in shadow mode:
 - A shadow failure is recorded but remains non-blocking while
   `CF_ASSETS_REQUIRED=false`.
 
+### Workers Static Assets production promotion (Stage 4)
+
+After the production route and two-hour gate pass, enable automatic promotion
+only with the complete Stage 4 controls:
+
+```bash
+CF_ASSETS_ENABLED=true
+CF_ASSETS_REQUIRED=true
+CF_ASSETS_ALLOW_PROMOTION=true
+PAGES_PURGE_URL=https://1aeo-metrics.pages.dev
+```
+
+Each scheduled job uploads an immutable version, requires the complete preview
+verifier to pass, records that exact version ID, and then runs:
+
+```bash
+wrangler versions deploy VERSION_ID@100% --yes --config wrangler.assets.toml
+```
+
+The version file is accepted only when it contains one valid Worker version
+UUID. Missing or malformed state, upload failure, preview-verification failure,
+or Wrangler deployment failure leaves the previous healthy production version
+active and fails the required Workers publication. Attempted promotions append
+one bounded timestamp/version/status row to
+`logs/cfassets-promotion-summary.tsv`; normal request logging remains disabled.
+
+While the Worker route fronts `SITE_URL`, the legacy Pages purge endpoint is
+not reachable through that hostname. `PAGES_PURGE_URL` therefore targets the
+canonical Pages deployment directly, while every purge body uses absolute
+`SITE_URL` cache keys. This keeps Pages usable as a fresh route-removal rollback
+without purging Workers Static Assets or making purge part of Worker version
+activation.
+
+Run `pnpm test` before activation. It includes the Node tests and every shell
+behavior suite, including enabled promotion, failure propagation, and the
+guarantee that an unverified candidate never reaches the promoter. Full
+activation and rollback details are in
+[`docs/WORKERS_STATIC_ASSETS_STAGE4_READINESS.md`](docs/WORKERS_STATIC_ASSETS_STAGE4_READINESS.md).
+
 A brand-new shadow Worker needs one route-free bootstrap deployment before its
 version preview URLs can serve the assets binding. Generate and inspect the
 configuration first, enable Workers Preview URLs for that Worker, and bootstrap

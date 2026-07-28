@@ -38,6 +38,7 @@ else
 fi
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/metrics-output}"
 SITE_URL="${SITE_URL:-https://metrics.example.com}"
+PAGES_PURGE_URL="${PAGES_PURGE_URL:-$SITE_URL}"
 CONSECUTIVE_FAILURES_FILE="/tmp/allium-deploy-failures"
 
 # Storage configuration
@@ -46,12 +47,44 @@ R2_ENABLED="${R2_ENABLED:-true}"
 DO_ENABLED="${DO_ENABLED:-false}"
 CF_ASSETS_ENABLED="${CF_ASSETS_ENABLED:-false}"
 CF_ASSETS_REQUIRED="${CF_ASSETS_REQUIRED:-false}"
+CF_ASSETS_ALLOW_PROMOTION="${CF_ASSETS_ALLOW_PROMOTION:-false}"
+CF_ASSETS_SCRIPT="${CF_ASSETS_SCRIPT:-$SCRIPT_DIR/allium-deploy-cfassets.sh}"
 CF_ASSETS_CONSECUTIVE_FILE="${CF_ASSETS_CONSECUTIVE_FILE:-$DEPLOY_DIR/logs/cfassets-shadow-consecutive-successes}"
 CF_ASSETS_JOB_SUMMARY_FILE="${CF_ASSETS_JOB_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-stage2-job-summary.tsv}"
 CF_ASSETS_MAX_JOB_SECONDS="${CF_ASSETS_MAX_JOB_SECONDS:-1800}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+assert_boolean_setting() {
+    local name="$1"
+    local value="$2"
+
+    case "$value" in
+        true|false) return 0 ;;
+        *)
+            log "invalid $name=$value; expected true or false"
+            return 2
+            ;;
+    esac
+}
+
+promote_verified_cfassets_if_ready() {
+    local upload_exit="${1:-1}"
+
+    if [[ ! "$upload_exit" =~ ^[0-9]+$ ]] || (( upload_exit > 255 )); then
+        log "invalid Workers Assets upload status: $upload_exit"
+        return 2
+    fi
+    if (( upload_exit != 0 )); then
+        return "$upload_exit"
+    fi
+    if [[ "$CF_ASSETS_ALLOW_PROMOTION" != "true" ]]; then
+        return 0
+    fi
+
+    "$CF_ASSETS_SCRIPT" --promote
 }
 
 require_current_deploy_checkout() {
@@ -314,15 +347,19 @@ record_stage2_job_result() {
     log "Stage 2 job result: status=$status total=${duration}s cadence_ok=$cadence_ok shadow_counter=$counter"
 }
 
-if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
-    return 0 2>/dev/null || exit 0
-fi
+record_update_exit() {
+    local update_status="$1"
 
-trap 'update_status=$?; trap - EXIT; set +e; record_stage2_job_result "$update_status" "$UPDATE_STARTED_EPOCH" "$UPDATE_STARTED_UTC"; exit "$update_status"' EXIT
+    trap - EXIT
+    set +e
+    record_stage2_job_result "$update_status" "$UPDATE_STARTED_EPOCH" "$UPDATE_STARTED_UTC"
+    exit "$update_status"
+}
 
 # Cloudflare CDN purge (runs once after all uploads)
 purge_cdn() {
     local site_url="${SITE_URL:-}"
+    local pages_purge_url="${PAGES_PURGE_URL:-$site_url}"
     local purge_secret="${PURGE_SECRET:-}"
     local source_dir="$OUTPUT_DIR"
     
@@ -330,16 +367,29 @@ purge_cdn() {
         log "ℹ️  Cloudflare CDN purge skipped (PURGE_SECRET or SITE_URL not configured)"
         return 0
     fi
+
+    site_url="${site_url%/}"
+    pages_purge_url="${pages_purge_url%/}"
+    if [[ "$site_url" != https://* || "$pages_purge_url" != https://* ]]; then
+        log "❌ Cloudflare CDN purge requires HTTPS SITE_URL and PAGES_PURGE_URL"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        log "❌ Cloudflare CDN purge requires jq for safe URL encoding"
+        return 1
+    fi
+
+    local purge_endpoint="${pages_purge_url}/_purge"
     
     log "🧹 Purging Cloudflare CDN cache..."
     
     # Purge search-index.json first (must be fresh before any page loads)
     log "   Purging search-index.json..."
     local si_purge_response si_purge_http_code
-    si_purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
+    si_purge_response=$(curl -s -w "\n%{http_code}" -X POST "$purge_endpoint" \
         -H "X-Purge-Secret: ${purge_secret}" \
         -H "Content-Type: application/json" \
-        -d '{"urls": ["search-index.json"]}' 2>&1 || true)
+        -d "{\"urls\": [\"${site_url}/search-index.json\"]}" 2>&1 || true)
     si_purge_http_code=$(echo "$si_purge_response" | tail -1)
     if [[ "$si_purge_http_code" != "200" ]]; then
         log "   ⚠️  search-index.json purge returned HTTP $si_purge_http_code"
@@ -348,10 +398,10 @@ purge_cdn() {
     # Purge Prometheus metrics (must be fresh for scraping)
     log "   Purging Prometheus metrics..."
     local pm_purge_response pm_purge_http_code
-    pm_purge_response=$(curl -s -w "\n%{http_code}" -X POST "${site_url}/_purge" \
+    pm_purge_response=$(curl -s -w "\n%{http_code}" -X POST "$purge_endpoint" \
         -H "X-Purge-Secret: ${purge_secret}" \
         -H "Content-Type: application/json" \
-        -d '{"urls": ["/metrics"]}' 2>&1 || true)
+        -d "{\"urls\": [\"${site_url}/metrics\"]}" 2>&1 || true)
     pm_purge_http_code=$(echo "$pm_purge_response" | tail -1)
     if [[ "$pm_purge_http_code" != "200" ]]; then
         log "   ⚠️  Prometheus metrics purge returned HTTP $pm_purge_http_code"
@@ -386,13 +436,14 @@ purge_cdn() {
         local batch=("${html_files[@]:i:batch_size}")
         
         local urls_json
-        urls_json=$(printf '"%s",' "${batch[@]}" | sed 's/,$//')
+        urls_json=$(jq -cn --arg base "$site_url" --args \
+            '$ARGS.positional | map($base + "/" + .)' "${batch[@]}")
         
         local purge_response
-        purge_response=$(curl -s -X POST "${site_url}/_purge" \
+        purge_response=$(curl -s -X POST "$purge_endpoint" \
             -H "X-Purge-Secret: ${purge_secret}" \
             -H "Content-Type: application/json" \
-            -d "{\"urls\": [${urls_json}]}" 2>&1)
+            -d "{\"urls\":${urls_json}}" 2>&1)
         
         if echo "$purge_response" | grep -q '"success":true'; then
             local batch_purged
@@ -410,6 +461,16 @@ purge_cdn() {
     
     log "   ✅ Purged $total_purged of $total_html cached HTML pages"
 }
+
+if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
+assert_boolean_setting CF_ASSETS_REQUIRED "$CF_ASSETS_REQUIRED"
+assert_boolean_setting CF_ASSETS_ALLOW_PROMOTION "$CF_ASSETS_ALLOW_PROMOTION"
+
+trap 'record_update_exit $?' EXIT
 
 log "========================================"
 log "Starting metrics update..."
@@ -557,6 +618,16 @@ if [[ -n "$CF_ASSETS_PID" ]]; then
     CF_ASSETS_TIME=$(printf '%dm%02ds' $((CF_ASSETS_DURATION/60)) $((CF_ASSETS_DURATION%60)))
     if [[ "$CF_ASSETS_EXIT" == "0" ]]; then
         log "✅ Workers Assets shadow upload and verification completed ($CF_ASSETS_TIME)"
+        if [[ "$CF_ASSETS_ALLOW_PROMOTION" == "true" ]]; then
+            log "🚀 Promoting verified Workers Assets version to production..."
+            if promote_verified_cfassets_if_ready "$CF_ASSETS_EXIT"; then
+                log "✅ Workers Assets promotion completed successfully"
+            else
+                PROMOTE_EXIT=$?
+                log "❌ Workers Assets promotion failed (exit $PROMOTE_EXIT)"
+                CF_ASSETS_EXIT=$PROMOTE_EXIT
+            fi
+        fi
     else
         log "⚠️ Workers Assets shadow upload failed (exit $CF_ASSETS_EXIT, $CF_ASSETS_TIME)"
     fi

@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@10.34.5",
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "node --test tests/*.test.js && for test_script in tests/test-*.sh; do bash \"$test_script\" || exit; done",
     "audit:cfassets-soak": "node scripts/audit-cfassets-soak.js"
   },
   "devDependencies": {
