@@ -198,6 +198,32 @@ mode. It does not authorize or represent activation of daily R2 cadence.
 
 ## 24-hour activation procedure
 
+### Scheduled checkpoint audit
+
+A one-shot user cron entry on `hostedopen` is scheduled for
+`2026-07-29T03:05:00Z` (`2026-07-28 20:05 PDT`). This is eight minutes after
+the formal 24-hour threshold and is positioned between the normal `:45` and
+`:15` Allium starts so the generated output and mirrors should be idle. It
+runs:
+
+```text
+/bin/bash /home/aeo1/allium-deploy/scripts/run-stage4-24h-acceptance.sh
+```
+
+The bounded result is written to
+`logs/cfassets-stage4-24h-acceptance.log`. The audit checks the 24-hour/48-job
+candidate and exact-promotion sequence; production statuses, hashes, headers,
+cache behavior, search, 404, and GPTBot access; generated/DO/R2 count, bytes,
+and representative hashes; all four daily-backup markers; Pages purge errors;
+and the current 100% Cloudflare deployment. It explicitly requires R2 to
+remain `every-build` during the audit.
+
+The audit is read-only and cannot activate Stage 5. It records that the
+Cloudflare invocation and current billing-dashboard review remains manual.
+The tagged cron entry removes itself after the attempt whether the audit passes
+or fails. Host configuration remains mode `600` with
+`R2_CONTENT_SYNC_INTERVAL=every-build`.
+
 At or after `2026-07-29T02:56:35Z`:
 
 1. Run `pnpm audit:cfassets-stage4 -- --started
