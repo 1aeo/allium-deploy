@@ -26,6 +26,24 @@ VERIFY_PATHS="${R2_CONTENT_VERIFY_PATHS:-index.html,search-index.json,1aeo.com/i
 EXPECTED_BACKUP_DATE="$(date '+%Y-%m-%d')"
 FAILURES=0
 
+remove_one_shot_cron_entry() {
+    local cron_tag="${STAGE4_AUDIT_CRON_TAG:-}"
+    local cron_tmp
+
+    [[ -n "$cron_tag" ]] || return 0
+    cron_tmp=$(mktemp)
+    if crontab -l 2>/dev/null | awk -v tag="$cron_tag" 'index($0, tag) == 0' > "$cron_tmp" &&
+        crontab "$cron_tmp"; then
+        echo "schedule_cleanup=removed one-shot cron entry"
+    else
+        echo "schedule_cleanup=failed to remove one-shot cron entry" >&2
+    fi
+    rm -f "$cron_tmp"
+    return 0
+}
+
+trap remove_one_shot_cron_entry EXIT
+
 pass() {
     printf 'ok - %s\n' "$1"
 }
