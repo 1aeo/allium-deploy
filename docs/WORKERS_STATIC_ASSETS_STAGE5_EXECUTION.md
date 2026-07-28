@@ -144,6 +144,58 @@ only with `R2_CONTENT_SYNC_INTERVAL` absent or explicitly set to
 
 This is a code-readiness deployment, not Stage 5 activation.
 
+### Safe-default production deployment result
+
+Preparation commit `a0f4445813cc1be7d379bf42832053d142af7787`, authored and
+committed by `1aeo <github@1aeo.com>`, passed the required GitHub `Shell
+Syntax` job, including Bash syntax, ShellCheck, all 18 Node tests, and all shell
+behavior suites. The clean `hostedopen` checkout fast-forwarded to that exact
+commit. Its ignored host configuration was explicitly set to
+`R2_CONTENT_SYNC_INTERVAL=every-build` and retained mode `600`.
+
+The scheduled job that began at `2026-07-28T04:45:01Z` generated its output
+before the host fast-forward, then invoked the newly deployed R2 child script
+from the current checkout. That real child logged `R2 live content
+synchronization is due (every-build)` and completed the existing live R2 sync
+in 257 seconds. Compatibility mode did not create
+`logs/last-r2-content-sync-date`.
+
+The same scheduled job then:
+
+- Uploaded and verified immutable candidate
+  `e0264838-acfa-4a6a-b1cf-ea3e7a944f91` in 467 seconds.
+- Passed the complete preview gate three consecutive times after one bounded
+  alias-propagation retry.
+- Promoted exactly that version at 100% with exit status 0 at
+  `2026-07-28T04:57:01Z`.
+- Completed the retained Pages purge without a 405.
+- Finished with whole-job exit status 0 in 856 seconds, inside the 1,800-second
+  cadence, advancing the consecutive counter to 17.
+
+Cloudflare independently reported a single active version,
+`e0264838-acfa-4a6a-b1cf-ea3e7a944f91`, at 100%. Production root and search
+index SHA-256 values exactly matched the generated files:
+
+| Representative | Generated and production SHA-256 |
+|---|---|
+| `/` | `e0f865fae8f966e34691348d326c67f151c9f945a99ab2e4e4c19207027ade4a` |
+| `/search-index.json` | `4e07cec855a973f56e81d04fb32eb8b180969c3cedcc739b8e41b761f79b156c` |
+
+Production returned root 200, search 302, custom missing 404, and
+`GPTBot/1.0` root 200. The root was a Cloudflare cache HIT with
+`Cache-Control: public, max-age=0, must-revalidate`, an ETag, and an LAS
+`CF-Ray`; it omitted both `X-Robots-Tag` and the legacy `X-Served-From`
+header.
+
+After this job, the bounded Stage 4 audit reported five jobs, five verified
+candidates, five matching successful promotions, zero audit errors, and a
+maximum duration of 1,434 seconds. It correctly remained incomplete at 7,397
+elapsed seconds versus the required 86,400 seconds and five jobs versus the
+required 48. The host checkout remained clean and aligned with `origin/main`.
+
+This result proves that the prepared code is safe in production compatibility
+mode. It does not authorize or represent activation of daily R2 cadence.
+
 ## 24-hour activation procedure
 
 At or after `2026-07-29T02:56:35Z`:
