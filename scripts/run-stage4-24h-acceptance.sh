@@ -65,9 +65,19 @@ sha256_url() {
     curl --max-time 60 -fsS "$1" | sha256sum | awk '{print $1}'
 }
 
-size_stats() {
-    timeout 600 "$RCLONE" size "$1" --json --log-level ERROR \
-        --exclude '_backups/**' --exclude '_headers' |
+local_size_stats() {
+    timeout 120 "$RCLONE" size "$1" --json --log-level ERROR \
+        --exclude '_headers' |
+        jq -er '[.count, .bytes] | @tsv'
+}
+
+remote_live_size_stats() {
+    timeout 300 node "$SCRIPT_DIR/audit-remote-live-stats.js" \
+        --source "$OUTPUT_DIR" \
+        --remote "$1" \
+        --rclone "$RCLONE" \
+        --concurrency 16 \
+        --timeout-seconds 120 |
         jq -er '[.count, .bytes] | @tsv'
 }
 
@@ -81,7 +91,8 @@ printf 'started_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 printf 'host=%s\n' "$(hostname)"
 printf 'checkout=%s\n' "$(git -C "$DEPLOY_DIR" rev-parse HEAD)"
 
-if flock -n /tmp/allium-deploy.lock true; then
+exec {audit_lock_fd}>/tmp/allium-deploy.lock
+if flock -w "${STAGE4_AUDIT_LOCK_WAIT_SECONDS:-0}" "$audit_lock_fd"; then
     pass "scheduled deployment output is idle and stable"
 else
     fail "a scheduled deployment is active; mirror parity cannot be audited safely"
@@ -136,9 +147,9 @@ else
     pass "production root is indexable and has no legacy source header"
 fi
 
-if source_stats=$(size_stats "$OUTPUT_DIR") &&
-    do_stats=$(size_stats "$DO_REMOTE") &&
-    r2_stats=$(size_stats "$R2_REMOTE"); then
+if source_stats=$(local_size_stats "$OUTPUT_DIR") &&
+    do_stats=$(remote_live_size_stats "$DO_REMOTE") &&
+    r2_stats=$(remote_live_size_stats "$R2_REMOTE"); then
     printf 'mirror_stats source=%s do=%s r2=%s\n' "$source_stats" "$do_stats" "$r2_stats"
     [[ "$source_stats" == "$do_stats" ]] && pass "DO object count and bytes match generated output" || fail "DO object count or bytes differ"
     [[ "$source_stats" == "$r2_stats" ]] && pass "R2 object count and bytes match generated output" || fail "R2 object count or bytes differ"
@@ -194,8 +205,9 @@ for token_file in \
 done
 export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
-if deployment_status=$(NO_COLOR=1 corepack pnpm exec wrangler deployments status \
-    --config "$DEPLOY_DIR/wrangler.assets.toml" 2>&1) &&
+if deployment_status=$(cd "$DEPLOY_DIR" &&
+    NO_COLOR=1 corepack pnpm exec wrangler deployments status \
+        --config "$DEPLOY_DIR/wrangler.assets.toml" 2>&1) &&
     grep -Fq "(100%) $latest_version" <<< "$deployment_status"; then
     pass "Cloudflare serves the latest verified version at 100% ($latest_version)"
 else
