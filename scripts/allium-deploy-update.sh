@@ -53,6 +53,18 @@ CF_ASSETS_CONSECUTIVE_FILE="${CF_ASSETS_CONSECUTIVE_FILE:-$DEPLOY_DIR/logs/cfass
 CF_ASSETS_JOB_SUMMARY_FILE="${CF_ASSETS_JOB_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-stage2-job-summary.tsv}"
 CF_ASSETS_MAX_JOB_SECONDS="${CF_ASSETS_MAX_JOB_SECONDS:-1800}"
 
+# Keep human-readable deployment output and error-only Wrangler diagnostics
+# bounded. Compact job/candidate/promotion TSV summaries are retained
+# separately and are not affected by this rotation.
+ALLIUM_UPDATE_LOG_FILE="${ALLIUM_UPDATE_LOG_FILE:-$DEPLOY_DIR/logs/update.log}"
+ALLIUM_UPDATE_LOG_MAX_BYTES="${ALLIUM_UPDATE_LOG_MAX_BYTES:-33554432}"
+ALLIUM_UPDATE_LOG_ARCHIVES="${ALLIUM_UPDATE_LOG_ARCHIVES:-3}"
+WRANGLER_LOG="${WRANGLER_LOG:-error}"
+WRANGLER_LOG_PATH="${WRANGLER_LOG_PATH:-$DEPLOY_DIR/logs/wrangler-error.log}"
+WRANGLER_LOG_SANITIZE="${WRANGLER_LOG_SANITIZE:-true}"
+WRANGLER_ERROR_LOG_MAX_BYTES="${WRANGLER_ERROR_LOG_MAX_BYTES:-8388608}"
+WRANGLER_ERROR_LOG_ARCHIVES="${WRANGLER_ERROR_LOG_ARCHIVES:-2}"
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
@@ -465,6 +477,18 @@ purge_cdn() {
 if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
+
+if ! ALLIUM_UPDATE_LOG_FILE="$ALLIUM_UPDATE_LOG_FILE" \
+    ALLIUM_UPDATE_LOG_MAX_BYTES="$ALLIUM_UPDATE_LOG_MAX_BYTES" \
+    ALLIUM_UPDATE_LOG_ARCHIVES="$ALLIUM_UPDATE_LOG_ARCHIVES" \
+    WRANGLER_LOG_PATH="$WRANGLER_LOG_PATH" \
+    WRANGLER_ERROR_LOG_MAX_BYTES="$WRANGLER_ERROR_LOG_MAX_BYTES" \
+    WRANGLER_ERROR_LOG_ARCHIVES="$WRANGLER_ERROR_LOG_ARCHIVES" \
+    "$SCRIPT_DIR/allium-deploy-maintain-logs.sh"; then
+    log "⚠️ Log maintenance failed; continuing the deployment"
+fi
+
+export WRANGLER_LOG WRANGLER_LOG_PATH WRANGLER_LOG_SANITIZE
 
 assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
 assert_boolean_setting CF_ASSETS_REQUIRED "$CF_ASSETS_REQUIRED"

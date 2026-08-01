@@ -49,6 +49,15 @@ path_for_file() {
     fi
 }
 
+file_size_bytes() {
+    local file="$1"
+    if stat -c '%s' "$file" >/dev/null 2>&1; then
+        stat -c '%s' "$file"
+    else
+        stat -f '%z' "$file"
+    fi
+}
+
 fetch_and_hash() {
     local label="$1"
     local url_path="$2"
@@ -57,9 +66,12 @@ fetch_and_hash() {
     local expected actual status
 
     expected=$(sha256sum "$local_file" | awk '{print $1}')
-    status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
+    if ! status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
         --output "$output_file" --write-out '%{http_code}' \
-        "$PREVIEW_URL$url_path")
+        "$PREVIEW_URL$url_path"); then
+        log "$label failed: transient curl/network error for $url_path"
+        return 1
+    fi
 
     if [[ "$status" != "200" ]]; then
         log "$label failed: HTTP $status for $url_path"
@@ -79,9 +91,12 @@ verify_headers() {
     local headers="$TMP_DIR/root.headers"
     local status cache_control robots
 
-    status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
+    if ! status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
         --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
-        "$PREVIEW_URL/")
+        "$PREVIEW_URL/"); then
+        log "root headers failed: transient curl/network error"
+        return 1
+    fi
     cache_control=$(awk 'BEGIN{IGNORECASE=1} /^cache-control:/ {$1=""; sub(/^ /, ""); gsub(/\r/, ""); print; exit}' "$headers")
     robots=$(awk 'BEGIN{IGNORECASE=1} /^x-robots-tag:/ {$1=""; sub(/^ /, ""); gsub(/\r/, ""); print; exit}' "$headers")
 
@@ -103,17 +118,23 @@ verify_directory_and_404() {
     local directory_path missing_status redirect_status
     directory_path=$(path_for_file "$nested_file")
 
-    redirect_status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
+    if ! redirect_status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
         --output /dev/null --write-out '%{http_code}' \
-        "${PREVIEW_URL}${directory_path%/}")
+        "${PREVIEW_URL}${directory_path%/}"); then
+        log "directory canonicalization failed: transient curl/network error"
+        return 1
+    fi
     [[ "$redirect_status" == "301" || "$redirect_status" == "302" || "$redirect_status" == "307" || "$redirect_status" == "308" ]] || {
         log "directory canonicalization failed: HTTP $redirect_status for ${directory_path%/}"
         return 1
     }
 
-    missing_status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
+    if ! missing_status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
         --output "$TMP_DIR/missing.body" --write-out '%{http_code}' \
-        "$PREVIEW_URL/__allium_cfassets_missing_probe__")
+        "$PREVIEW_URL/__allium_cfassets_missing_probe__"); then
+        log "custom 404 failed: transient curl/network error"
+        return 1
+    fi
     [[ "$missing_status" == "404" ]] || {
         log "custom 404 failed: HTTP $missing_status"
         return 1
@@ -137,9 +158,12 @@ verify_search() {
     }
 
     headers="$TMP_DIR/search.headers"
-    status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
+    if ! status=$(curl --silent --show-error --max-time "$CURL_TIMEOUT" \
         --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
-        "$PREVIEW_URL/search?q=$fingerprint")
+        "$PREVIEW_URL/search?q=$fingerprint"); then
+        log "search verification failed: transient curl/network error"
+        return 1
+    fi
     location=$(awk 'BEGIN{IGNORECASE=1} /^location:/ {$1=""; sub(/^ /, ""); gsub(/\r/, ""); print; exit}' "$headers")
     expected="/relay/${fingerprint}/"
 
@@ -164,8 +188,14 @@ INDEX_FILE="$SOURCE_DIR/search-index.json"
 NESTED_FILE=$(find "$SOURCE_DIR" -mindepth 2 -type f -name index.html -print | sort | awk 'NR == 1 { print }')
 [[ -n "$NESTED_FILE" ]] || { echo "No nested index.html found" >&2; exit 2; }
 
-LARGEST_RECORD=$(find "$SOURCE_DIR" -type f ! -name _headers -printf '%s %p\n' | sort -nr | awk 'NR == 1 { print }')
-LARGEST_FILE="${LARGEST_RECORD#* }"
+LARGEST_RECORD=$(
+    while IFS= read -r candidate_file; do
+        printf '%s\t%s\n' "$(file_size_bytes "$candidate_file")" "$candidate_file"
+    done < <(find "$SOURCE_DIR" -type f ! -name _headers -print) \
+        | sort -t $'\t' -k1,1nr \
+        | awk 'NR == 1 { print }'
+)
+LARGEST_FILE="${LARGEST_RECORD#*$'\t'}"
 [[ -f "$LARGEST_FILE" ]] || { echo "Could not select largest file" >&2; exit 2; }
 
 NESTED_PATH=$(path_for_file "$NESTED_FILE")
@@ -196,7 +226,7 @@ for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
         fi
     else
         consecutive=0
-        log "attempt $attempt did not pass; waiting ${RETRY_DELAY}s for bounded edge propagation"
+        log "attempt $attempt did not pass; waiting ${RETRY_DELAY}s for a bounded transient retry"
     fi
 
     if (( attempt < MAX_ATTEMPTS )); then

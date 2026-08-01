@@ -5,10 +5,9 @@ import { auditSoak } from '../scripts/audit-cfassets-soak.js';
 
 const SHADOW_HEADER = 'timestamp_utc\tversion_id\tduration_seconds\tfile_count\tbyte_count\tpreview_url\tconsecutive_successes';
 const JOB_HEADER = 'started_utc\tfinished_utc\texit_status\ttotal_duration_seconds\tcadence_ok\tshadow_counter';
-const PREVIEW = 'https://allium-stage2-worker.example.workers.dev';
-
 function shadowRow(timestamp, version, duration, files, bytes, counter) {
-  return [timestamp, version, duration, files, bytes, PREVIEW, counter].join('\t');
+  const preview = `https://${version.slice(0, 8)}-allium-stage2-worker.example.workers.dev`;
+  return [timestamp, version, duration, files, bytes, preview, counter].join('\t');
 }
 
 function jobRow(started, finished, status, duration, cadence, counter) {
@@ -40,6 +39,7 @@ test('accepts a complete sequential scheduled segment', () => {
   assert.deepEqual(report.progress, { current: 3, target: 3, complete: true });
   assert.equal(report.currentSegment.shadowRows, 3);
   assert.equal(report.currentSegment.jobRows, 3);
+  assert.equal(report.currentSegment.uniqueVersionedPreviewUrls, 3);
   assert.deepEqual(report.currentSegment.totalJobDurationSeconds, { min: 733, max: 1040 });
 });
 
@@ -99,4 +99,15 @@ test('rejects a whole-job failure even if a Worker row exists', () => {
   const report = auditSoak(fixture);
   assert.equal(report.ok, false);
   assert.match(report.errors.join('\n'), /exit status is 1/);
+});
+
+test('rejects a mutable preview alias in immutable-version evidence', () => {
+  const fixture = validFixture();
+  fixture.shadowTsv = fixture.shadowTsv.replace(
+    'https://22222222-allium-stage2-worker.example.workers.dev',
+    'https://allium-stage2-allium-stage2-worker.example.workers.dev',
+  );
+  const report = auditSoak(fixture);
+  assert.equal(report.ok, false);
+  assert.match(report.errors.join('\n'), /does not match the immutable Worker version prefix/);
 });

@@ -122,7 +122,8 @@ export function auditSoak({
   const fileCounts = [];
   const byteCounts = [];
   const jobDurations = [];
-  let previewUrl = null;
+  const previewUrls = new Set();
+  let latestPreviewUrl = null;
   let maxFileDeltaPercent = 0;
   let maxByteDeltaPercent = 0;
 
@@ -145,11 +146,16 @@ export function auditSoak({
       if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith('.workers.dev') || parsedUrl.pathname !== '/') {
         errors.push(`${prefix}: preview URL is not an HTTPS workers.dev root`);
       }
+      const expectedVersionPrefix = `${row.version_id.slice(0, 8).toLowerCase()}-`;
+      if (!parsedUrl.hostname.toLowerCase().startsWith(expectedVersionPrefix)) {
+        errors.push(`${prefix}: preview URL does not match the immutable Worker version prefix`);
+      }
     } catch {
       errors.push(`${prefix}: invalid preview URL`);
     }
-    if (previewUrl === null) previewUrl = row.preview_url;
-    else if (row.preview_url !== previewUrl) errors.push(`${prefix}: preview alias changed within the current segment`);
+    if (previewUrls.has(row.preview_url)) errors.push(`${prefix}: versioned preview URL was reused`);
+    previewUrls.add(row.preview_url);
+    latestPreviewUrl = row.preview_url;
 
     if (row.files >= maxAssetFiles) {
       errors.push(`${prefix}: ${row.files} files reaches or exceeds the ${maxAssetFiles}-file limit`);
@@ -221,7 +227,8 @@ export function auditSoak({
       jobRows: jobs.length,
       firstStartedUtc: jobs[0]?.started_utc ?? null,
       lastFinishedUtc: jobs.at(-1)?.finished_utc ?? null,
-      previewUrl,
+      latestPreviewUrl,
+      uniqueVersionedPreviewUrls: previewUrls.size,
       workerDurationSeconds: range(durations),
       totalJobDurationSeconds: range(jobDurations),
       assetFiles: range(fileCounts),

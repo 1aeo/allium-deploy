@@ -39,6 +39,11 @@ CF_ASSETS_ENV_OVERRIDES=(
     CF_ASSETS_VERIFY_MAX_ATTEMPTS
     CF_ASSETS_VERIFY_RETRY_DELAY
     CF_ASSETS_VERIFY_CURL_TIMEOUT
+    CF_ASSETS_UPLOAD_MAX_ATTEMPTS
+    CF_ASSETS_UPLOAD_RETRY_DELAY
+    WRANGLER_LOG
+    WRANGLER_LOG_PATH
+    WRANGLER_LOG_SANITIZE
 )
 capture_env_overrides "${CF_ASSETS_ENV_OVERRIDES[@]}"
 
@@ -69,6 +74,11 @@ export CF_ASSETS_VERIFY_ATTEMPTS="${CF_ASSETS_VERIFY_ATTEMPTS:-3}"
 export CF_ASSETS_VERIFY_MAX_ATTEMPTS="${CF_ASSETS_VERIFY_MAX_ATTEMPTS:-12}"
 export CF_ASSETS_VERIFY_RETRY_DELAY="${CF_ASSETS_VERIFY_RETRY_DELAY:-10}"
 export CF_ASSETS_VERIFY_CURL_TIMEOUT="${CF_ASSETS_VERIFY_CURL_TIMEOUT:-60}"
+CF_ASSETS_UPLOAD_MAX_ATTEMPTS="${CF_ASSETS_UPLOAD_MAX_ATTEMPTS:-3}"
+CF_ASSETS_UPLOAD_RETRY_DELAY="${CF_ASSETS_UPLOAD_RETRY_DELAY:-15}"
+WRANGLER_LOG="${WRANGLER_LOG:-error}"
+WRANGLER_LOG_PATH="${WRANGLER_LOG_PATH:-$DEPLOY_DIR/logs/wrangler-error.log}"
+WRANGLER_LOG_SANITIZE="${WRANGLER_LOG_SANITIZE:-true}"
 
 log() {
     printf '[CF-Assets] %s\n' "$1"
@@ -180,6 +190,10 @@ load_cloudflare_token() {
 run_wrangler() {
     (
         cd "$DEPLOY_DIR"
+        export WRANGLER_LOG WRANGLER_LOG_PATH WRANGLER_LOG_SANITIZE
+        if [[ -n "${WRANGLER_OUTPUT_FILE_PATH:-}" ]]; then
+            export WRANGLER_OUTPUT_FILE_PATH
+        fi
         if command -v pnpm >/dev/null 2>&1; then
             pnpm exec wrangler "$@"
         elif command -v corepack >/dev/null 2>&1; then
@@ -188,6 +202,47 @@ run_wrangler() {
             npx --no-install wrangler "$@"
         fi
     )
+}
+
+validate_upload_retry_settings() {
+    [[ "$CF_ASSETS_UPLOAD_MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || {
+        log "invalid CF_ASSETS_UPLOAD_MAX_ATTEMPTS=$CF_ASSETS_UPLOAD_MAX_ATTEMPTS"
+        return 2
+    }
+    [[ "$CF_ASSETS_UPLOAD_RETRY_DELAY" =~ ^[0-9]+$ ]] || {
+        log "invalid CF_ASSETS_UPLOAD_RETRY_DELAY=$CF_ASSETS_UPLOAD_RETRY_DELAY"
+        return 2
+    }
+    case "$WRANGLER_LOG" in
+        none|error|warn|info|log|debug|NONE|ERROR|WARN|INFO|LOG|DEBUG) ;;
+        *) log "invalid WRANGLER_LOG=$WRANGLER_LOG"; return 2 ;;
+    esac
+    assert_boolean_setting WRANGLER_LOG_SANITIZE "$WRANGLER_LOG_SANITIZE"
+}
+
+parse_upload_metadata() {
+    local metadata_file="$1"
+    local parsed expected_prefix
+
+    [[ -s "$metadata_file" ]] || return 1
+    if ! parsed=$(jq -r \
+        'select(.type == "version-upload" and .version == 1) | [.version_id // "", .preview_url // ""] | @tsv' \
+        "$metadata_file" | tail -n 1); then
+        return 1
+    fi
+    IFS=$'\t' read -r version_id preview_url <<< "$parsed"
+    [[ "$version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+
+    expected_prefix="https://${version_id:0:8}-${CF_ASSETS_WORKER_NAME}."
+    [[ "$preview_url" == "${expected_prefix}"*".workers.dev" ]] || return 1
+    [[ "$preview_url" =~ ^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.workers\.dev$ ]] || return 1
+}
+
+is_transient_upload_failure() {
+    local output_file="$1"
+    grep -Eiq \
+        '(^|[^0-9])5[0-9]{2}([^0-9]|$)|timed? out|timeout|network|fetch failed|socket|ECONN|EAI_AGAIN|ENOTFOUND|unexpected end|malformed|invalid (json|response)|internal error' \
+        "$output_file"
 }
 
 promote_verified_version() {
@@ -233,6 +288,7 @@ trap 'record_failure $?' EXIT
 assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
 assert_boolean_setting CF_ASSETS_ALLOW_PROMOTION "$CF_ASSETS_ALLOW_PROMOTION"
 assert_safe_worker_name
+validate_upload_retry_settings
 generate_config
 
 if [[ "$MODE" == "--generate-only" ]]; then
@@ -256,27 +312,55 @@ fi
     exit 0
 }
 
+command -v jq >/dev/null 2>&1 || {
+    log "jq is required for structured Wrangler upload metadata"
+    exit 2
+}
 assert_fresh_checkout
 load_cloudflare_token
 mkdir -p "$DEPLOY_DIR/logs"
 
 UPLOAD_OUTPUT=$(mktemp)
-trap 'status=$?; rm -f "$UPLOAD_OUTPUT"; record_failure "$status"' EXIT
+UPLOAD_METADATA=$(mktemp)
+trap 'status=$?; rm -f "$UPLOAD_OUTPUT" "$UPLOAD_METADATA"; record_failure "$status"' EXIT
 
 started=$(date +%s)
-log "uploading immutable shadow version for $CF_ASSETS_WORKER_NAME"
-if ! run_wrangler versions upload \
-    --preview-alias "$CF_ASSETS_PREVIEW_ALIAS" \
-    --config "$CF_ASSETS_CONFIG" 2>&1 | tee "$UPLOAD_OUTPUT"; then
-    log "version upload failed"
-    exit 1
-fi
+version_id=""
+preview_url=""
+upload_status=1
+for ((upload_attempt=1; upload_attempt<=CF_ASSETS_UPLOAD_MAX_ATTEMPTS; upload_attempt++)); do
+    : > "$UPLOAD_OUTPUT"
+    : > "$UPLOAD_METADATA"
+    log "uploading immutable shadow version for $CF_ASSETS_WORKER_NAME (attempt $upload_attempt/$CF_ASSETS_UPLOAD_MAX_ATTEMPTS)"
 
-version_id=$(sed -n 's/.*Worker Version ID: //p' "$UPLOAD_OUTPUT" | tr -d '\r' | tail -1)
-preview_url=$(sed -n 's/.*Version Preview Alias URL: //p' "$UPLOAD_OUTPUT" | tr -d '\r' | tail -1)
+    if WRANGLER_OUTPUT_FILE_PATH="$UPLOAD_METADATA" run_wrangler versions upload \
+        --preview-alias "$CF_ASSETS_PREVIEW_ALIAS" \
+        --config "$CF_ASSETS_CONFIG" 2>&1 | tee "$UPLOAD_OUTPUT"; then
+        upload_status=0
+    else
+        upload_status=${PIPESTATUS[0]}
+    fi
 
-[[ -n "$version_id" ]] || { log "could not parse Worker Version ID"; exit 1; }
-[[ "$preview_url" == https://*workers.dev ]] || { log "could not parse preview alias URL"; exit 1; }
+    if (( upload_status == 0 )); then
+        if parse_upload_metadata "$UPLOAD_METADATA"; then
+            break
+        fi
+        upload_status=1
+        log "version upload returned malformed or incomplete structured metadata"
+    elif ! is_transient_upload_failure "$UPLOAD_OUTPUT"; then
+        log "version upload failed with a non-transient error; refusing retry"
+        exit "$upload_status"
+    else
+        log "version upload hit a transient Cloudflare/network failure"
+    fi
+
+    if (( upload_attempt >= CF_ASSETS_UPLOAD_MAX_ATTEMPTS )); then
+        log "version upload failed after $CF_ASSETS_UPLOAD_MAX_ATTEMPTS bounded attempts"
+        exit "$upload_status"
+    fi
+    log "waiting ${CF_ASSETS_UPLOAD_RETRY_DELAY}s before upload retry"
+    sleep "$CF_ASSETS_UPLOAD_RETRY_DELAY"
+done
 
 "$CF_ASSETS_VERIFY_SCRIPT" "$preview_url" "$CF_ASSETS_DIRECTORY"
 
