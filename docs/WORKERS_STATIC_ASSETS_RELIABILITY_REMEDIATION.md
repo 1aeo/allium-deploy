@@ -12,10 +12,18 @@ was restarted at `2026-08-01T11:26:48Z`. Recovery then exposed a separate
 direct-Pages cache-key mismatch described below. Commit
 `e83b42c404bebd6386a50150fc6daacf2fc1b7d0` corrected that mismatch, the
 deployed Pages rollback function passed a live cache/purge trial, and the
-authoritative clean-window marker was restarted a final time at
-`2026-08-01T12:02:27Z` with a counter of zero. No production route, active
-Worker service, mirror policy, backup, or retention setting changed during
-either restart.
+clean-window marker was restarted at `2026-08-01T12:02:27Z` with a counter of
+zero.
+
+Five subsequent jobs were clean. The sixth completed every publication and
+promotion successfully, but a 26-minute 7-second DigitalOcean sync made the
+whole job 1,926 seconds. The fixed 1,800-second cadence gate correctly rejected
+that row and reset the counter. Commit
+`635572771c89b2b20a67944c9ae7cffb2b87a779` added the bounded DigitalOcean
+request-rate remediation described below. The current authoritative marker is
+`2026-08-01T15:29:08Z`, with a counter of zero before its first scheduled
+trial. No production route, active Worker service, mirror policy, backup, or
+retention setting changed during these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -199,7 +207,7 @@ The trial completed at `2026-08-01T12:01:50Z`. It proves the existing purge
 works without doubling the URL list or adding extra Pages Function
 invocations. The clean marker was then reset to
 `2026-08-01T12:02:27Z`, ensuring no pre-correction build can satisfy the new
-gate. The preceding normal job, from `2026-08-01T11:45:01Z` through
+gate at that point. The preceding normal job, from `2026-08-01T11:45:01Z` through
 `2026-08-01T11:56:40Z`, had otherwise succeeded in 699 seconds, verified and
 promoted version `d59addaf-9c7e-44b0-ae8b-59e8358e0e22`, and demonstrated
 normal recovery from the guarded refusal; it is intentionally outside the
@@ -233,11 +241,42 @@ symlink intact, created no replacement debug file, and grew the bounded main
 `update.log` only to approximately 69 KB. Main deployment errors remain
 captured there.
 
-Two read-only one-shot audits are installed in hostedopen's user crontab:
+The first five ordinary rows after the Pages cache correction completed in
+1,100, 729, 844, 868, and 831 seconds. Each row promoted its exact immutable
+candidate, retained the DigitalOcean every-build mirror and Pages rollback
+target, skipped only the already-current R2 daily live replication, and kept
+production healthy. The sixth row, from `2026-08-01T14:45:01Z` through
+`2026-08-01T15:17:07Z`, also exited zero and promoted exact version
+`145412d2-c21d-4560-91d9-9cf8f5ee4b8e` at 100%. Its DigitalOcean upload,
+however, took 26 minutes 7 seconds and the whole job took 1,926 seconds. The
+counter therefore reset to zero exactly as designed; the necessarily
+overlapping `:15` scheduler slot could not start a second deployment.
 
-- Smoke audit: `2026-08-01T17:05:00Z`, after enough 30-minute jobs should exist
+The DigitalOcean trace showed no integrity or publication failure. The same
+approximately 4 GiB and 29,000-object payload had completed in as little as 3
+minutes 12 seconds, while the failed-cadence run repeatedly fell below 1
+MiB/second. At the existing 56 transfers and 80 checkers, a fast run averaged
+about 151 completed files/second before counting the separate PUT, HEAD, LIST,
+and comparison operations. DigitalOcean recommends managing request patterns
+above roughly 150 operations/second, and rclone documents a transaction-rate
+limiter for provider throttling.
+
+Commit `635572771c89b2b20a67944c9ae7cffb2b87a779` therefore adds a
+DigitalOcean-only `--tpslimit=120 --tpslimit-burst=1`. It deliberately keeps
+the 56 transfer workers, 80 checkers, every-build sync, stale-object deletion,
+post-upload integrity HEAD, retry policy, backup cadence, and retention
+unchanged. R2 receives an explicit unlimited default, so its behavior is also
+unchanged. Invalid rate or burst settings fail before rclone runs. The complete
+25-test JavaScript suite and every shell integration test passed both locally
+and on hostedopen. Hostedopen runs rclone 1.72.0, which exposes both limiter
+flags.
+
+Two replacement read-only one-shot audits are installed in hostedopen's user
+crontab from the current marker:
+
+- Smoke audit: `2026-08-01T21:05:00Z`, after enough 30-minute jobs should exist
   to satisfy the 10-job count.
-- Full audit: `2026-08-02T12:05:00Z`, after more than 24 hours and at least 48
+- Full audit: `2026-08-02T16:05:00Z`, after more than 24 hours and at least 48
   scheduled jobs should exist.
 
 Each audit removes only its own tagged crontab entry after running. Neither
@@ -246,8 +285,7 @@ retention.
 
 ## Fresh validation gates
 
-Activation, the operational restart, and the final Pages cache-key restart
-described above reset only
+Activation and each explicitly recorded restart described above reset only
 `logs/cfassets-shadow-consecutive-successes` to zero and wrote
 `logs/cfassets-remediation-start-utc`. Existing historical summaries were not
 truncated or rewritten. The full audit filters every job, candidate, and
@@ -296,11 +334,19 @@ Pages, mirrors, cadence, backups, or retention.
 ## DigitalOcean runtime follow-up
 
 The clean-window gate intentionally retains the 30-minute whole-job limit.
-DigitalOcean remains the approved every-build hot independent mirror. If the
-fresh window fails only because a DigitalOcean sync crosses that limit, first
-measure transfer/checker saturation and object churn from the bounded job
-summaries. Do not reduce redundancy, change retention, or decouple the mirror
-without a separately reviewed implementation and rollback plan.
+DigitalOcean remains the approved every-build hot independent mirror. The
+120-transaction/second limiter is now the sole live tuning change and the new
+window measures it against complete, changing builds. If that bounded trial
+still crosses the limit, preserve the failed evidence and reassess the request
+cap before considering any architectural change. Do not reduce redundancy,
+change retention, disable integrity checks, or decouple the mirror without a
+separately reviewed implementation and rollback plan.
+
+References:
+
+- [DigitalOcean Spaces performance best practices](https://docs.digitalocean.com/products/spaces/concepts/best-practices/)
+- [DigitalOcean Spaces limits](https://docs.digitalocean.com/products/spaces/details/limits/)
+- [rclone transaction-rate limiting](https://rclone.org/docs/#tpslimit-float)
 
 ## Path to Stage 6
 

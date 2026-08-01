@@ -17,11 +17,16 @@ That segment was invalidated when `origin/main` advanced during a running job
 and the promotion freshness guard correctly refused the stale checkout. A
 subsequent recovery exposed and corrected the direct-Pages cache-key mismatch
 documented in the remediation record. The deployed correction passed a live
-two-object `MISS`/`HIT`/purge/`MISS` trial. The authoritative clean-window
-marker restarted at `2026-08-01T12:02:27Z` with a counter of zero. All earlier
-evidence remains in the compact summaries but is outside the new audit window.
-The count advances only through normal scheduled jobs; it is not accelerated
-with synthetic uploads.
+two-object `MISS`/`HIT`/purge/`MISS` trial. Five clean rows followed. A sixth
+row then completed successfully but took 1,926 seconds because its
+DigitalOcean mirror required 26 minutes 7 seconds, so the fixed cadence gate
+correctly invalidated that segment. A DigitalOcean-only 120-transaction/second
+cap is now live from commit `635572771c89b2b20a67944c9ae7cffb2b87a779`,
+without changing every-build redundancy or integrity checks. The authoritative
+clean-window marker restarted at `2026-08-01T15:29:08Z` with a counter of
+zero. All earlier evidence remains in the compact summaries but is outside the
+new audit window. The count advances only through normal scheduled jobs; it is
+not accelerated with synthetic uploads.
 
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom
@@ -97,11 +102,12 @@ domain state. It reported exactly two blockers: the seven-day boundary and the
 fresh 10-build/24-hour evidence window. It reported no authorization or
 control-plane-shape blocker.
 
-The first normal job in that final evidence window completed successfully at
-`2026-08-01T12:33:21Z`, promoted its exact verified immutable candidate, and
-left the counter at 1 of 10. Its subsequent audit passed every live health,
-mirror, rollback, R2, and active-version check; only the intentionally
-incomplete count remained.
+The prior window's first five normal jobs promoted exact verified immutable
+candidates and passed every live health, mirror, rollback, R2, and
+active-version check. The sixth job's sole gate failure was duration; its
+publication and promotion were successful and production remained healthy.
+The replacement window begins only after the request-rate remediation and
+must independently satisfy all smoke and full requirements.
 
 ## Reviewed live sequence
 
