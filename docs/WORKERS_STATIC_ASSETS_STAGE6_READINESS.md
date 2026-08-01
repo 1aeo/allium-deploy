@@ -41,9 +41,11 @@ policy.
 
 The read-only audit at `2026-08-01T21:05:05Z` passed the 10-of-10 smoke gate
 with zero errors. Production, mirror, direct rollback, hash, R2 marker,
-AI-indexing, and exact active-version checks all passed. The installed
-`2026-08-01T21:35:00Z` one-shot remains as an independent unattended smoke
-confirmation. The full audit remains scheduled for
+AI-indexing, and exact active-version checks all passed. The independent
+unattended audit at `2026-08-01T21:35:01Z` then passed with 11 clean jobs and
+11 unique immutable previews, repeated the complete live check set with zero
+errors, and removed only its own one-shot cron entry. The full audit remains
+scheduled for
 `2026-08-02T16:35:00Z`; it must independently prove at least 24 hours and 48
 clean scheduled jobs. All earlier evidence remains in the compact summaries
 but is outside the current audit window. The count advances only through

@@ -352,14 +352,15 @@ mirror hashes, direct Pages rollback hashes, daily R2 configuration and
 all passed. This completes the post-fix smoke gate but does not substitute for
 the independent 24-hour/48-job audit.
 
-Two replacement read-only one-shot audits are installed in hostedopen's user
+Two replacement read-only one-shot audits were scheduled in hostedopen's user
 crontab from the current marker:
 
-- Smoke audit: `2026-08-01T21:35:00Z`, after enough 30-minute jobs should exist
-  to satisfy the 10-job count. The immediate audit already passed; this
-  unattended run remains installed as an independent confirmation.
+- Smoke audit: the unattended run started at `2026-08-01T21:35:01Z`, passed
+  with 11 clean jobs, 11 unique immutable previews, and zero errors, then
+  removed only its own tagged crontab entry. All production, mirror, rollback,
+  R2, AI-indexing, hash, and active-version checks passed.
 - Full audit: `2026-08-02T16:35:00Z`, after more than 24 hours and at least 48
-  scheduled jobs should exist.
+  scheduled jobs should exist; this one-shot remains installed.
 
 Each audit removes only its own tagged crontab entry after running. Neither
 audit can advance Stage 6 or mutate Cloudflare, mirrors, backups, cadence, or
