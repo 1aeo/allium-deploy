@@ -24,6 +24,12 @@ STORAGE_NAME="DO-Spaces"
 # Override parallelism for DO Spaces (lower to avoid 503 rate limiting)
 TRANSFERS="${DO_RCLONE_TRANSFERS:-56}"
 CHECKERS="${DO_RCLONE_CHECKERS:-80}"
+# A full Allium build replaces roughly 29,000 small objects. Limit aggregate
+# HTTP operations so the PUT/HEAD/check burst stays below DigitalOcean's
+# request-rate optimization threshold while retaining enough workers to keep
+# the pipeline full. This does not disable rclone's post-upload integrity HEAD.
+TPS_LIMIT="${DO_RCLONE_TPS_LIMIT:-120}"
+TPS_LIMIT_BURST="${DO_RCLONE_TPS_LIMIT_BURST:-1}"
 # The retained _backups tree is much larger than the hot mirror. Disabling
 # ListR lets rclone prune that excluded directory instead of recursively
 # enumerating every retained backup object on each scheduled sync.
@@ -89,6 +95,7 @@ ensure_spaces_remote
 log "🌊 DigitalOcean Spaces Upload"
 log "   Bucket: $DO_BUCKET_NAME ($DO_REGION)"
 log "   Parallel: $TRANSFERS transfers, $CHECKERS checkers"
+log "   Transaction rate: $TPS_LIMIT operations/second, burst $TPS_LIMIT_BURST"
 if [[ "$DO_USE_CDN" == "true" ]]; then
     log "   Mode: CDN (faster, may cache up to 1hr)"
 else

@@ -38,6 +38,8 @@ setup_common_vars() {
     S3_CONCURRENCY="${RCLONE_S3_UPLOAD_CONCURRENCY:-32}"
     S3_CHUNK="${RCLONE_S3_CHUNK_SIZE:-16M}"
     RCLONE_FAST_LIST="${RCLONE_FAST_LIST:-true}"
+    TPS_LIMIT="${RCLONE_TPS_LIMIT:-0}"
+    TPS_LIMIT_BURST="${RCLONE_TPS_LIMIT_BURST:-1}"
     
     DAILY_LOCAL_BACKUP="${DAILY_LOCAL_BACKUP:-true}"
 }
@@ -54,9 +56,18 @@ build_rclone_opts() {
             ;;
     esac
 
+    if [[ ! "$TPS_LIMIT" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+        echo "RCLONE_TPS_LIMIT must be a non-negative number (got: $TPS_LIMIT)" >&2
+        return 2
+    fi
+    if [[ ! "$TPS_LIMIT_BURST" =~ ^[1-9][0-9]*$ ]]; then
+        echo "RCLONE_TPS_LIMIT_BURST must be a positive integer (got: $TPS_LIMIT_BURST)" >&2
+        return 2
+    fi
+
     # _headers is parsed by Workers Static Assets and must not become an
     # object in the DO or R2 mirrors.
-    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK $fast_list_opt --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
+    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK --tpslimit=$TPS_LIMIT --tpslimit-burst=$TPS_LIMIT_BURST $fast_list_opt --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
 }
 
 # --- Backup Functions ---
