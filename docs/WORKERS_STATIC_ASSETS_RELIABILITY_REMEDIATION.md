@@ -25,9 +25,10 @@ successfully, but left too little cadence margin. Commit
 `92630c461a847ff98645da4155c7aaba5eb4b1c2` then isolated DigitalOcean
 transfers onto small HTTP/1.1 connections while preserving the request cap.
 The current authoritative marker is `2026-08-01T16:14:14Z`. Its first normal
-scheduled job completed in 1,071 seconds and advanced the counter to one. No
-production route, active Worker service, mirror policy, backup, or retention
-setting changed during these restarts.
+scheduled job completed in 1,071 seconds and the tenth completed at
+`2026-08-01T21:04:25Z`. The immediate smoke audit passed 10 of 10 with zero
+errors. No production route, active Worker service, mirror policy, backup, or
+retention setting changed during these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -331,11 +332,32 @@ active-version check. Its only incomplete condition was the expected two-of-ten
 count. Across the first two isolated-connection jobs, the DigitalOcean mirror
 took 12 minutes 2 seconds and 13 minutes 22 seconds; neither job missed a slot.
 
+The remaining eight smoke-window jobs also exited zero, finished inside the
+1,800-second cadence limit, used distinct version-specific preview URLs, and
+promoted exactly their verified versions at 100%. The tenth job was a realistic
+full-build stress case: it mirrored 4.150 GiB across 29,254 changed files to
+DigitalOcean in 12 minutes 51 seconds, completed the whole job in 1,164
+seconds, and retained 636 seconds before the next scheduler slot. Across all
+ten jobs, total duration ranged from 1,071 to 1,178 seconds and the Worker
+upload-and-verification phase ranged from 387 to 516 seconds. Prepared outputs
+contained 29,541–29,743 assets and 4,285,750,937–4,517,268,979 bytes; the
+largest adjacent changes were 0.674% by file count and 5.390% by bytes.
+
+The read-only smoke audit at `2026-08-01T21:05:05Z` passed 10 of 10 with zero
+errors. It confirmed ten unique immutable version preview URLs and all ten
+successful cadence-bounded job rows. Production root `200`, search `302`,
+missing-path `404`, GPTBot `200`, generated-output hashes, DigitalOcean hot-
+mirror hashes, direct Pages rollback hashes, daily R2 configuration and
+`2026-08-01` success marker, and the latest verified Worker version at 100%
+all passed. This completes the post-fix smoke gate but does not substitute for
+the independent 24-hour/48-job audit.
+
 Two replacement read-only one-shot audits are installed in hostedopen's user
 crontab from the current marker:
 
 - Smoke audit: `2026-08-01T21:35:00Z`, after enough 30-minute jobs should exist
-  to satisfy the 10-job count.
+  to satisfy the 10-job count. The immediate audit already passed; this
+  unattended run remains installed as an independent confirmation.
 - Full audit: `2026-08-02T16:35:00Z`, after more than 24 hours and at least 48
   scheduled jobs should exist.
 

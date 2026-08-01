@@ -30,25 +30,24 @@ every-build integrity behavior while using small HTTP/1.1 connections only for
 DigitalOcean.
 
 The authoritative clean-window marker restarted at
-`2026-08-01T16:14:14Z`. Its first scheduled job completed successfully in
-1,071 seconds, including a 12-minute 2-second DigitalOcean mirror, leaving 729
-seconds of cadence margin. It promoted exact verified version
-`9ab14a1b-fe6b-4b4b-8fd8-28d28d6e6112`, skipped only the already-current daily
-R2 live sync, retained the Pages rollback path, and passed every immediate
-production, mirror, rollback, R2, hash, AI-indexing, and active-version check.
-The one-of-ten count was the audit's only expected incomplete condition. The
-complete hostedopen suite also passed at the deployed commit. One-shot smoke
-and full audits are scheduled for `2026-08-01T21:35:00Z` and
-`2026-08-02T16:35:00Z`. All earlier evidence remains in the compact summaries
-but is outside the new audit window. The count advances only through normal
-scheduled jobs; it is not accelerated with synthetic uploads.
+`2026-08-01T16:14:14Z`. Ten consecutive normal scheduled jobs then exited
+zero, completed inside 1,800 seconds, used ten unique immutable preview URLs,
+and promoted exactly their verified versions at 100%. Total job duration
+ranged from 1,071 to 1,178 seconds. The tenth row exercised a full 4.150 GiB,
+29,254-changed-file DigitalOcean mirror and still finished in 1,164 seconds.
+Every job preserved the approved DigitalOcean every-build mirror, daily R2
+live replication, Pages rollback path, backups, retention, and AI crawler
+policy.
 
-The second scheduled job completed in 1,160 seconds with a 13-minute
-22-second DigitalOcean mirror and advanced the counter to two. It promoted its
-distinct exact verified version and passed the same complete read-only health
-audit; two of ten was its only expected incomplete condition. The first two
-post-fix jobs therefore retained 729 and 640 seconds of cadence margin without
-changing the approved mirror, backup, R2, Pages, retention, or crawler policy.
+The read-only audit at `2026-08-01T21:05:05Z` passed the 10-of-10 smoke gate
+with zero errors. Production, mirror, direct rollback, hash, R2 marker,
+AI-indexing, and exact active-version checks all passed. The installed
+`2026-08-01T21:35:00Z` one-shot remains as an independent unattended smoke
+confirmation. The full audit remains scheduled for
+`2026-08-02T16:35:00Z`; it must independently prove at least 24 hours and 48
+clean scheduled jobs. All earlier evidence remains in the compact summaries
+but is outside the current audit window. The count advances only through
+normal scheduled jobs; it is not accelerated with synthetic uploads.
 
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom

@@ -3,9 +3,10 @@
 **Status:** Approved plan; Stages 1–5 are active; the Stage 4 seven-day
 production soak continues from `2026-07-28T02:56:35Z`. After a guarded
 checkout refusal and a separately discovered direct-Pages cache-key mismatch,
-the deployed correction passed a live purge trial and the final fresh
-reliability window restarted at `2026-08-01T12:02:27Z`. Stage 6 remains gated
-on that clean 10-build/24-hour evidence plus the original seven-day boundary.
+the deployed correction passed a live purge trial. The final post-transport-fix
+window began at `2026-08-01T16:14:14Z` and its 10-build smoke audit passed with
+zero errors at `2026-08-01T21:05:05Z`. Stage 6 remains gated on the independent
+24-hour/48-job evidence plus the original seven-day boundary.
 
 **Approved:** 2026-07-26
 
@@ -707,7 +708,8 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] First 24 production hours and at least 48 Stage 4 jobs pass the split
   acceptance gate with current R2 frequency unchanged.
 - [x] R2 live synchronization changes to daily with retry-safe markers.
-- [ ] Post-remediation 10-build and 24-hour clean validation gates pass.
+- [x] Post-remediation 10-build clean validation gate passes.
+- [ ] Post-remediation 24-hour/48-job clean validation gate passes.
 - [ ] Seven-day production soak passes before Pages or rollback machinery is
   retired.
 - [ ] Pages rollback window completes.
