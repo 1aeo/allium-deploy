@@ -114,7 +114,12 @@ CONTROL_PLANE=$(jq '.routes[0].script = "wrong-worker"' <<<"$original_state")
 if validate_route_soak_state >/dev/null 2>&1; then
     fail_test "a route to the wrong Worker was accepted"
 fi
-pass "Stage 6 rejects ambiguous DNS, existing domains, and wrong routes"
+
+CONTROL_PLANE=$(jq '.routes += [{"id":"unrelated","pattern":"other.1aeo.com/*","script":"other-worker"}]' <<<"$original_state")
+if validate_route_soak_state >/dev/null 2>&1; then
+    fail_test "an unreviewed additional zone route was accepted"
+fi
+pass "Stage 6 rejects ambiguous DNS, existing domains, and unreviewed routes"
 
 run_successful_execution_order_test() (
     events="$TMP_DIR/execute-events"

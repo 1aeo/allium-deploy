@@ -69,7 +69,9 @@ Preflight never sends a mutating API request. It requires and checks:
 - The complete post-remediation 10-build and 24-hour acceptance audit.
 - Exactly one proxied production CNAME to the Pages hostname and no second DNS
   record for the production name.
-- Exactly one `metrics.1aeo.com/*` route to the approved Worker.
+- The zone route set contains exactly one route:
+  `metrics.1aeo.com/*` to the approved Worker. Any additional route requires a
+  separate review before cutover because it could obscure Custom Domain proof.
 - No existing Worker Custom Domain for the hostname.
 - Exactly one production-domain association on the approved Pages project.
 - Exactly one explicit, enabled Pages rollback-maintenance setting.

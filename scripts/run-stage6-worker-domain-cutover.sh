@@ -174,8 +174,8 @@ validate_route_soak_state() {
     [[ "$(jq --arg host "$SITE_HOST" '[.dns[] | select(.name == $host)] | length' <<<"$CONTROL_PLANE")" == 1 ]] \
         || { fail "unexpected additional production DNS record"; return 1; }
     [[ "$route_count" == 1 ]] || { fail "expected one exact production Worker route"; return 1; }
-    [[ "$(jq --arg pattern "$EXPECTED_ROUTE_PATTERN" '[.routes[] | select(.pattern == $pattern)] | length' <<<"$CONTROL_PLANE")" == 1 ]] \
-        || { fail "unexpected duplicate production Worker route"; return 1; }
+    [[ "$(jq '.routes | length' <<<"$CONTROL_PLANE")" == 1 ]] \
+        || { fail "unexpected additional zone Worker route requires separate review"; return 1; }
     [[ "$domain_count" == 0 ]] || { fail "Worker Custom Domain already exists"; return 1; }
     [[ "$pages_count" == 1 ]] || { fail "expected Pages project to retain the production domain"; return 1; }
 
@@ -251,9 +251,8 @@ assert_worker_domain_state() {
 assert_route_absent() {
     local routes count
     routes=$(cf_api GET "/zones/${ZONE_ID}/workers/routes") || return 1
-    count=$(jq --arg pattern "$EXPECTED_ROUTE_PATTERN" \
-        '[.result[] | select(.pattern == $pattern)] | length' <<<"$routes")
-    [[ "$count" == 0 ]] || { fail "production Worker route still exists"; return 1; }
+    count=$(jq '.result | length' <<<"$routes")
+    [[ "$count" == 0 ]] || { fail "a zone Worker route still exists"; return 1; }
 }
 
 restore_route() {
@@ -436,11 +435,13 @@ execute_cutover() {
     set_pages_maintenance true false
     log "disabled Pages deployment and purge maintenance"
 
+    # The desired external and runtime state is complete. A local evidence-file
+    # error must be reported, but must not reintroduce the protective route.
+    trap - ERR
     printf '%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
         "$WORKER_DOMAIN_ID" "$WORKER_NAME" "$SNAPSHOT_FILE" \
         > "$STATE_DIR/stage6-worker-domain-active.tsv"
     chmod 600 "$STATE_DIR/stage6-worker-domain-active.tsv"
-    trap - ERR
     flock -u 9
     log "ok - Stage 6 Worker Custom Domain cutover completed"
 }
