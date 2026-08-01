@@ -20,10 +20,14 @@ promotion successfully, but a 26-minute 7-second DigitalOcean sync made the
 whole job 1,926 seconds. The fixed 1,800-second cadence gate correctly rejected
 that row and reset the counter. Commit
 `635572771c89b2b20a67944c9ae7cffb2b87a779` added the bounded DigitalOcean
-request-rate remediation described below. The current authoritative marker is
-`2026-08-01T15:29:08Z`, with a counter of zero before its first scheduled
-trial. No production route, active Worker service, mirror policy, backup, or
-retention setting changed during these restarts.
+request-rate remediation described below. Its first scheduled trial completed
+successfully, but left too little cadence margin. Commit
+`92630c461a847ff98645da4155c7aaba5eb4b1c2` then isolated DigitalOcean
+transfers onto small HTTP/1.1 connections while preserving the request cap.
+The current authoritative marker is `2026-08-01T16:14:14Z`. Its first normal
+scheduled job completed in 1,071 seconds and advanced the counter to one. No
+production route, active Worker service, mirror policy, backup, or retention
+setting changed during these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -271,12 +275,57 @@ unchanged. Invalid rate or burst settings fail before rclone runs. The complete
 and on hostedopen. Hostedopen runs rclone 1.72.0, which exposes both limiter
 flags.
 
+The first capped trial ran from `2026-08-01T15:45:02Z` through
+`2026-08-01T16:13:13Z`. It exited zero, promoted its exact verified Worker
+candidate, and kept R2, Pages, DigitalOcean, and production healthy. The
+DigitalOcean phase nevertheless required 21 minutes 27 seconds and the whole
+job required 1,691 seconds. That technically met the 1,800-second gate but
+left only 109 seconds before the next scheduler slot, which is not adequate
+margin for a 48-job acceptance window.
+
+Live transport inspection explained why the request cap alone was
+insufficient. With HTTP/2 enabled, rclone used one established connection for
+the 56 transfer workers while CPU, memory, disk, and network capacity on
+hostedopen remained idle. The transfer rate repeatedly fell below 1 MiB/second
+without a logged `429` or `503`. DigitalOcean's performance guidance recommends
+several small parallel connections, and rclone 1.72.0 exposes
+`--s3-disable-http2` for this S3 transport behavior.
+
+Commit `92630c461a847ff98645da4155c7aaba5eb4b1c2` adds a validated generic
+`RCLONE_S3_DISABLE_HTTP2` option and enables it only for DigitalOcean by
+default through `DO_RCLONE_DISABLE_HTTP2=true`. R2 retains HTTP/2 and its
+unlimited transaction-rate default. DigitalOcean still uses 56 transfers, 80
+checkers, the 120-transaction/second cap and burst one, every-build mirroring,
+stale-object deletion, post-upload integrity verification, and the existing
+retry policy. Invalid boolean values fail before rclone runs. The complete
+repository suite passed locally before deployment and again on hostedopen at
+the exact deployed commit.
+
+The first normal HTTP/1.1-isolated job ran from
+`2026-08-01T16:15:01Z` through `2026-08-01T16:32:52Z`. It opened 77 observed
+established transfer connections rather than one. DigitalOcean completed the
+same approximately 4 GiB, 29,000-object every-build mirror in 12 minutes 2
+seconds: 9 minutes 25 seconds faster than the immediately preceding capped
+HTTP/2 trial. The whole job completed in 1,071 seconds, 10 minutes 20 seconds
+faster, leaving 729 seconds of scheduler margin. It uploaded and passed three
+complete immutable-preview checks for version
+`9ab14a1b-fe6b-4b4b-8fd8-28d28d6e6112`, promoted that exact version at 100%,
+skipped only the already-current daily R2 live sync, and completed the retained
+Pages deployment and purge.
+
+The immediate read-only audit at `2026-08-01T16:33:23Z` passed production root
+`200`, search `302`, missing-path `404`, GPTBot `200`, generated-output hashes,
+DigitalOcean hashes, direct Pages rollback hashes, daily R2 configuration and
+marker, and the exact active Worker version. Its only expected failure was the
+incomplete count: one of ten required post-marker jobs. This is the first row
+of the authoritative replacement window.
+
 Two replacement read-only one-shot audits are installed in hostedopen's user
 crontab from the current marker:
 
-- Smoke audit: `2026-08-01T21:05:00Z`, after enough 30-minute jobs should exist
+- Smoke audit: `2026-08-01T21:35:00Z`, after enough 30-minute jobs should exist
   to satisfy the 10-job count.
-- Full audit: `2026-08-02T16:05:00Z`, after more than 24 hours and at least 48
+- Full audit: `2026-08-02T16:35:00Z`, after more than 24 hours and at least 48
   scheduled jobs should exist.
 
 Each audit removes only its own tagged crontab entry after running. Neither
@@ -335,18 +384,21 @@ Pages, mirrors, cadence, backups, or retention.
 
 The clean-window gate intentionally retains the 30-minute whole-job limit.
 DigitalOcean remains the approved every-build hot independent mirror. The
-120-transaction/second limiter is now the sole live tuning change and the new
-window measures it against complete, changing builds. If that bounded trial
-still crosses the limit, preserve the failed evidence and reassess the request
-cap before considering any architectural change. Do not reduce redundancy,
-change retention, disable integrity checks, or decouple the mirror without a
-separately reviewed implementation and rollback plan.
+live transport now combines the 120-transaction/second limiter with
+DigitalOcean-only HTTP/1.1 connection isolation. The first job recovered 729
+seconds of scheduler margin, but the new 10-build and 24-hour window must prove
+that result across complete changing builds. If a later job still crosses the
+limit, preserve the failed evidence and reassess the cap or a redundancy-
+preserving decoupling design before any architectural change. Do not reduce
+redundancy, change retention, disable integrity checks, or decouple the mirror
+without a separately reviewed implementation and rollback plan.
 
 References:
 
 - [DigitalOcean Spaces performance best practices](https://docs.digitalocean.com/products/spaces/concepts/best-practices/)
 - [DigitalOcean Spaces limits](https://docs.digitalocean.com/products/spaces/details/limits/)
 - [rclone transaction-rate limiting](https://rclone.org/docs/#tpslimit-float)
+- [rclone S3 options](https://rclone.org/s3/)
 
 ## Path to Stage 6
 

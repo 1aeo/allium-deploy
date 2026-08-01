@@ -21,12 +21,27 @@ two-object `MISS`/`HIT`/purge/`MISS` trial. Five clean rows followed. A sixth
 row then completed successfully but took 1,926 seconds because its
 DigitalOcean mirror required 26 minutes 7 seconds, so the fixed cadence gate
 correctly invalidated that segment. A DigitalOcean-only 120-transaction/second
-cap is now live from commit `635572771c89b2b20a67944c9ae7cffb2b87a779`,
-without changing every-build redundancy or integrity checks. The authoritative
-clean-window marker restarted at `2026-08-01T15:29:08Z` with a counter of
-zero. All earlier evidence remains in the compact summaries but is outside the
-new audit window. The count advances only through normal scheduled jobs; it is
-not accelerated with synthetic uploads.
+cap from commit `635572771c89b2b20a67944c9ae7cffb2b87a779` improved the next
+run but still left only 109 seconds of cadence margin. Live inspection found
+that rclone's 56 workers shared one HTTP/2 connection while hostedopen was not
+resource-constrained. Commit
+`92630c461a847ff98645da4155c7aaba5eb4b1c2` therefore keeps the cap and all
+every-build integrity behavior while using small HTTP/1.1 connections only for
+DigitalOcean.
+
+The authoritative clean-window marker restarted at
+`2026-08-01T16:14:14Z`. Its first scheduled job completed successfully in
+1,071 seconds, including a 12-minute 2-second DigitalOcean mirror, leaving 729
+seconds of cadence margin. It promoted exact verified version
+`9ab14a1b-fe6b-4b4b-8fd8-28d28d6e6112`, skipped only the already-current daily
+R2 live sync, retained the Pages rollback path, and passed every immediate
+production, mirror, rollback, R2, hash, AI-indexing, and active-version check.
+The one-of-ten count was the audit's only expected incomplete condition. The
+complete hostedopen suite also passed at the deployed commit. One-shot smoke
+and full audits are scheduled for `2026-08-01T21:35:00Z` and
+`2026-08-02T16:35:00Z`. All earlier evidence remains in the compact summaries
+but is outside the new audit window. The count advances only through normal
+scheduled jobs; it is not accelerated with synthetic uploads.
 
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom
@@ -106,8 +121,9 @@ The prior window's first five normal jobs promoted exact verified immutable
 candidates and passed every live health, mirror, rollback, R2, and
 active-version check. The sixth job's sole gate failure was duration; its
 publication and promotion were successful and production remained healthy.
-The replacement window begins only after the request-rate remediation and
-must independently satisfy all smoke and full requirements.
+The replacement window begins only after both the request-rate and connection-
+isolation remediations and must independently satisfy all smoke and full
+requirements.
 
 ## Reviewed live sequence
 
