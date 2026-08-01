@@ -125,6 +125,17 @@ domain state. It reported exactly two blockers: the seven-day boundary and the
 fresh 10-build/24-hour evidence window. It reported no authorization or
 control-plane-shape blocker.
 
+The read-only preflight was repeated at `2026-08-01T21:37:47Z` after the smoke
+gate passed. It again authenticated both credential paths, accepted the exact
+DNS/route/Worker-domain/Pages-domain state, required Pages rollback maintenance
+to remain enabled, and confirmed the clean checkout matched `origin/main`.
+The embedded full audit found 11 verified candidates, 11 successful
+promotions, 11 unique immutable previews, no row errors, and every live health
+check passing. Preflight still reported exactly two blockers: only 18,432 of
+the required 86,400 seconds and 11 of the required 48 jobs had elapsed, and the
+fixed `2026-08-04T02:56:35Z` boundary had not passed. There was no credential,
+configuration, checkout, or control-plane-shape blocker.
+
 The prior window's first five normal jobs promoted exact verified immutable
 candidates and passed every live health, mirror, rollback, R2, and
 active-version check. The sixth job's sole gate failure was duration; its
