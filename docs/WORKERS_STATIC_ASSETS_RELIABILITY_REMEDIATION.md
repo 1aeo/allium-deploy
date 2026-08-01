@@ -102,6 +102,48 @@ The repository suite covers:
 The complete suite passed both in the development worktree and on hostedopen
 after activation.
 
+## Live activation evidence
+
+The first scheduled job after the remediation marker ran from
+`2026-08-01T10:15:01Z` through `2026-08-01T10:35:16Z` and completed with status
+zero inside the 1,800-second cadence bound. It uploaded version
+`dc6753fa-ea61-4cfe-a51a-737bef2d7e07`, derived the immutable preview URL
+`https://dc6753fa-1aeo-metrics-assets-stage2.ceo-8f4.workers.dev` from Wrangler's
+structured output, passed all three complete preview-verification attempts,
+and promoted that exact version at 100%.
+
+The same job kept the other approved properties intact:
+
+- The DigitalOcean hot mirror completed.
+- The direct Pages rollback deployment and purge completed.
+- R2 live replication skipped because the already-verified daily marker was
+  current; no other publication or verification stage was skipped.
+- Production root, search, missing-path, GPTBot, local-output hash,
+  DigitalOcean hash, Pages rollback hash, R2 marker, and active Worker version
+  checks passed in the subsequent read-only audit.
+
+This is job 1 of the required 10-job smoke window. The incomplete result is an
+expected time/count gate rather than a health failure.
+
+The first live run also demonstrated that Wrangler's file sink receives debug
+records independently of the configured console level. That 7.4 MB raw file
+was preserved as a verified 1.6 MB gzip, and commit
+`803240a30682a5d383553dd19e6cde986c0f2f90` changed the default file sink to a
+guarded `/dev/null` symlink. The complete repository suite passed on hostedopen
+after that runtime sink was installed. Main deployment errors remain captured
+by the bounded `update.log`.
+
+Two read-only one-shot audits are installed in hostedopen's user crontab:
+
+- Smoke audit: `2026-08-01T15:10:00Z`, after enough 30-minute jobs should exist
+  to satisfy the 10-job count.
+- Full audit: `2026-08-02T11:05:00Z`, after more than 24 hours and at least 48
+  scheduled jobs should exist.
+
+Each audit removes only its own tagged crontab entry after running. Neither
+audit can advance Stage 6 or mutate Cloudflare, mirrors, backups, cadence, or
+retention.
+
 ## Fresh validation gates
 
 Activation reset only `logs/cfassets-shadow-consecutive-successes` to zero and
@@ -167,6 +209,28 @@ boundary has passed, proceed with Stage 6 exactly as already approved:
 3. Keep the final Pages deployment dormant through the selected 14–30-day
    rollback window.
 4. Use the previous known-good Worker version as the normal rollback target.
+
+The Stage 6 control-plane sequence must preserve availability while replacing
+the current Pages CNAME and broad Worker route:
+
+1. Record the current DNS record, route, active Worker version, Pages custom
+   domain, and direct Pages rollback URL.
+2. Remove the existing `metrics.1aeo.com` Pages CNAME immediately before
+   attaching `metrics.1aeo.com` as a Worker Custom Domain. Keep the existing
+   Worker route during this control-plane transition.
+3. Run the complete production status, behavior, hash, AI-indexing, mirror,
+   rollback, and active-version checks through the new custom domain.
+4. Remove the now-redundant broad Worker route only after those checks pass,
+   then repeat the complete health gate.
+5. Detach the custom domain from the Pages project only after the Worker Custom
+   Domain is healthy. Keep the direct Pages deployment dormant for the chosen
+   rollback window.
+
+The current API token can inspect and change Worker routes/domains and DNS, but
+the Pages domain endpoint currently returns authorization failure. Before
+Stage 6, add the account-level Cloudflare Pages Edit permission (named Pages
+Write by the API) to the existing short-lived credential without posting the
+token in documentation or chat.
 
 No Pages project deletion, backup deletion, or retention reduction is part of
 this remediation or its validation.
