@@ -320,6 +320,17 @@ marker, and the exact active Worker version. Its only expected failure was the
 incomplete count: one of ten required post-marker jobs. This is the first row
 of the authoritative replacement window.
 
+The second normal job ran from `2026-08-01T16:45:02Z` through
+`2026-08-01T17:04:22Z`. DigitalOcean completed in 13 minutes 22 seconds, the
+whole job completed in 1,160 seconds with 640 seconds of cadence margin, and
+the counter advanced to two. The distinct immutable candidate
+`c9f2a48a-5783-4932-881d-4f5ff4850fda` passed all three complete preview
+checks and was promoted at 100%. The audit at `2026-08-01T17:04:54Z` again
+passed every live production, mirror, rollback, R2, hash, AI-indexing, and
+active-version check. Its only incomplete condition was the expected two-of-ten
+count. Across the first two isolated-connection jobs, the DigitalOcean mirror
+took 12 minutes 2 seconds and 13 minutes 22 seconds; neither job missed a slot.
+
 Two replacement read-only one-shot audits are installed in hostedopen's user
 crontab from the current marker:
 

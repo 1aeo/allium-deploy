@@ -43,6 +43,13 @@ and full audits are scheduled for `2026-08-01T21:35:00Z` and
 but is outside the new audit window. The count advances only through normal
 scheduled jobs; it is not accelerated with synthetic uploads.
 
+The second scheduled job completed in 1,160 seconds with a 13-minute
+22-second DigitalOcean mirror and advanced the counter to two. It promoted its
+distinct exact verified version and passed the same complete read-only health
+audit; two of ten was its only expected incomplete condition. The first two
+post-fix jobs therefore retained 729 and 640 seconds of cadence margin without
+changing the approved mirror, backup, R2, Pages, retention, or crawler policy.
+
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom
 Domains, DNS, and Worker routes. The separate mode-`600` Pages deployment
