@@ -122,16 +122,29 @@ The same job kept the other approved properties intact:
   DigitalOcean hash, Pages rollback hash, R2 marker, and active Worker version
   checks passed in the subsequent read-only audit.
 
-This is job 1 of the required 10-job smoke window. The incomplete result is an
-expected time/count gate rather than a health failure.
+The next scheduled job ran from `2026-08-01T10:45:01Z` through
+`2026-08-01T11:07:30Z`. It completed with status zero in 1,349 seconds,
+verified the distinct immutable version
+`de283c7f-d4c7-4d69-9ed6-3109899daec7` at
+`https://de283c7f-1aeo-metrics-assets-stage2.ceo-8f4.workers.dev`, and promoted
+that exact version at 100%. DigitalOcean completed in 16 minutes 50 seconds;
+R2 alone skipped its already-verified daily live sync; Pages rollback remained
+current. The subsequent read-only audit passed every production, mirror,
+rollback, hash, AI-indexing, R2, and active-version check.
+
+The live counter is therefore 2 of the required 10 jobs. The audit's only
+non-passing result is the expected incomplete time/count gate, not a health
+failure.
 
 The first live run also demonstrated that Wrangler's file sink receives debug
 records independently of the configured console level. That 7.4 MB raw file
 was preserved as a verified 1.6 MB gzip, and commit
 `803240a30682a5d383553dd19e6cde986c0f2f90` changed the default file sink to a
 guarded `/dev/null` symlink. The complete repository suite passed on hostedopen
-after that runtime sink was installed. Main deployment errors remain captured
-by the bounded `update.log`.
+after that runtime sink was installed. The next complete scheduled job left the
+symlink intact, created no replacement debug file, and grew the bounded main
+`update.log` only to approximately 69 KB. Main deployment errors remain
+captured there.
 
 Two read-only one-shot audits are installed in hostedopen's user crontab:
 
