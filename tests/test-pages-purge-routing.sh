@@ -65,3 +65,10 @@ grep -F 'https://metrics.1aeo.com/metrics' "$MOCK_CALLS" >/dev/null \
 grep -F 'https://metrics.1aeo.com/' "$MOCK_CALLS" >/dev/null \
     || fail "HTML batch did not contain absolute production cache keys"
 pass "Pages rollback purge bypasses the Worker route and deletes production-host cache keys"
+
+: > "$MOCK_CALLS"
+# shellcheck disable=SC2034
+PAGES_ROLLBACK_MAINTENANCE_ENABLED=false
+maintain_pages_rollback_cache >/dev/null
+[[ ! -s "$MOCK_CALLS" ]] || fail "disabled Pages rollback maintenance still invoked purge requests"
+pass "disabled Pages rollback maintenance makes no purge requests"

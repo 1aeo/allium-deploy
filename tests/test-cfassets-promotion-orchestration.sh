@@ -71,3 +71,10 @@ status=$?
 set -e
 [[ "$status" -eq 2 ]] || fail "invalid orchestrator boolean returned $status instead of 2"
 pass "orchestrator feature gates accept only explicit true or false"
+
+set +e
+assert_boolean_setting PAGES_ROLLBACK_MAINTENANCE_ENABLED yes >/dev/null
+status=$?
+set -e
+[[ "$status" -eq 2 ]] || fail "invalid Pages rollback maintenance boolean returned $status instead of 2"
+pass "Pages rollback maintenance accepts only explicit true or false"

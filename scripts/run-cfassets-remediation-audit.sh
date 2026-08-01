@@ -76,13 +76,24 @@ if [[ ! "$STARTED_UTC" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}
     fail "remediation start marker is missing or malformed"
 fi
 
-exec {audit_lock_fd}>/tmp/allium-deploy.lock
-if flock -w "${CF_REMEDIATION_AUDIT_LOCK_WAIT_SECONDS:-1800}" "$audit_lock_fd"; then
-    pass "scheduled deployment output is idle and stable"
-else
-    fail "deployment lock did not become available"
-fi
-
+audit_lock_owned=false
+case "${CF_REMEDIATION_AUDIT_CALLER_HOLDS_LOCK:-false}" in
+    true)
+        pass "caller holds the deployment lock; output is stable"
+        ;;
+    false)
+        exec {audit_lock_fd}>/tmp/allium-deploy.lock
+        if flock -w "${CF_REMEDIATION_AUDIT_LOCK_WAIT_SECONDS:-1800}" "$audit_lock_fd"; then
+            audit_lock_owned=true
+            pass "scheduled deployment output is idle and stable"
+        else
+            fail "deployment lock did not become available"
+        fi
+        ;;
+    *)
+        fail "CF_REMEDIATION_AUDIT_CALLER_HOLDS_LOCK must be true or false"
+        ;;
+esac
 smoke_report="$DEPLOY_DIR/logs/cfassets-remediation-smoke-report.json"
 if node "$SCRIPT_DIR/audit-cfassets-soak.js" \
     --shadow "$DEPLOY_DIR/logs/cfassets-shadow-summary.tsv" \
@@ -191,6 +202,8 @@ else
     fail "Cloudflare production version does not match the latest promotion"
 fi
 
-flock -u "$audit_lock_fd" || true
+if [[ "$audit_lock_owned" == true ]]; then
+    flock -u "$audit_lock_fd" || true
+fi
 printf 'failures=%s\n' "$FAILURES"
 (( FAILURES == 0 ))

@@ -39,6 +39,7 @@ fi
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/metrics-output}"
 SITE_URL="${SITE_URL:-https://metrics.example.com}"
 PAGES_PURGE_URL="${PAGES_PURGE_URL:-$SITE_URL}"
+PAGES_ROLLBACK_MAINTENANCE_ENABLED="${PAGES_ROLLBACK_MAINTENANCE_ENABLED:-true}"
 CONSECUTIVE_FAILURES_FILE="/tmp/allium-deploy-failures"
 
 # Storage configuration
@@ -475,6 +476,14 @@ purge_cdn() {
     log "   ✅ Purged $total_purged of $total_html cached HTML pages"
 }
 
+maintain_pages_rollback_cache() {
+    if [[ "$PAGES_ROLLBACK_MAINTENANCE_ENABLED" == "true" ]]; then
+        purge_cdn
+    else
+        log "ℹ️  Pages rollback maintenance disabled; skipping Pages purge"
+    fi
+}
+
 if [[ "${ALLIUM_DEPLOY_TEST_MODE:-}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -500,6 +509,7 @@ export WRANGLER_LOG WRANGLER_LOG_PATH WRANGLER_LOG_SANITIZE
 assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
 assert_boolean_setting CF_ASSETS_REQUIRED "$CF_ASSETS_REQUIRED"
 assert_boolean_setting CF_ASSETS_ALLOW_PROMOTION "$CF_ASSETS_ALLOW_PROMOTION"
+assert_boolean_setting PAGES_ROLLBACK_MAINTENANCE_ENABLED "$PAGES_ROLLBACK_MAINTENANCE_ENABLED"
 
 trap 'record_update_exit $?' EXIT
 
@@ -559,7 +569,9 @@ if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
         log "⚠️  SEARCH-INDEX SCHEMA CHANGED: v$OLD_SCHEMA_VERSION → v$NEW_SCHEMA_VERSION"
         log "⚠️  Auto-deploying search.js to match new search-index schema..."
 
-        if ! require_current_deploy_checkout; then
+        if [[ "$PAGES_ROLLBACK_MAINTENANCE_ENABLED" != "true" ]]; then
+            log "ℹ️  Pages rollback maintenance disabled; skipping schema-triggered Pages deploy"
+        elif ! require_current_deploy_checkout; then
             log "❌ search.js auto-deploy skipped - deploy checkout is not safe"
             log "❌ Update/clean $DEPLOY_DIR, then run: $DEPLOY_DIR/scripts/allium-deploy-cfpages.sh"
         elif "$DEPLOY_DIR/scripts/allium-deploy-cfpages.sh" >> "$DEPLOY_DIR/logs/cfpages-deploy.log" 2>&1; then
@@ -684,8 +696,10 @@ fi
 
 reset_failures
 
-# Step 3: Purge Cloudflare CDN cache (once, after all uploads)
-purge_cdn
+# Step 3: Keep the direct Pages rollback deployment fresh until Stage 6 moves
+# the hostname to a Worker Custom Domain. Stage 6 changes this single gate only
+# after the new origin passes the complete health check.
+maintain_pages_rollback_cache
 
 # Wait for prune to finish
 if [[ -n "${PRUNE_PID:-}" ]]; then

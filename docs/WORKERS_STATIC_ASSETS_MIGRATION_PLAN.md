@@ -30,6 +30,10 @@ The immutable-preview, bounded-retry, log-containment remediation and its fresh
 10-build/24-hour gates are tracked in
 [`WORKERS_STATIC_ASSETS_RELIABILITY_REMEDIATION.md`](WORKERS_STATIC_ASSETS_RELIABILITY_REMEDIATION.md).
 
+The gated Worker Custom Domain control-plane sequence, Pages maintenance gate,
+rollback behavior, and tests are tracked in
+[`WORKERS_STATIC_ASSETS_STAGE6_READINESS.md`](WORKERS_STATIC_ASSETS_STAGE6_READINESS.md).
+
 ## Decisions that apply to every stage
 
 - Allium is the priority. Do not migrate any non-Allium project until Allium has completed its rollout and billing-validation stages.
@@ -608,6 +612,9 @@ References:
 - [DigitalOcean Spaces pricing](https://docs.digitalocean.com/products/spaces/details/pricing/)
 
 ## Stage 6 — Retire the Pages request path and purge machinery
+
+The dormant implementation and exact execution gates are recorded in
+[`WORKERS_STATIC_ASSETS_STAGE6_READINESS.md`](WORKERS_STATIC_ASSETS_STAGE6_READINESS.md).
 
 After at least seven stable production days, and preferably after keeping the old Pages rollback target for 14–30 days:
 
