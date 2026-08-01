@@ -2,7 +2,9 @@
 
 **Status:** Approved plan; Stages 1–5 are active; the Stage 4 seven-day
 production soak continues from `2026-07-28T02:56:35Z`. A fresh reliability
-validation window started at `2026-08-01T09:57:20Z` before Stage 6.
+validation window restarted at `2026-08-01T11:26:48Z` before Stage 6 after an
+operator-induced checkout freshness refusal safely invalidated the earlier
+two-job segment.
 
 **Approved:** 2026-07-26
 

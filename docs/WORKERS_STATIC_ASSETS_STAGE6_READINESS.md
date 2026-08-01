@@ -10,11 +10,15 @@ until both independent gates pass:
 2. The original seven-day production boundary,
    `2026-08-04T02:56:35Z`, has passed.
 
-As of the latest recorded live check, the remediation counter is 2 of 10. Both
-jobs used unique immutable Worker preview URLs, promoted the exact verified
-version, completed inside 1,800 seconds, and passed the subsequent production,
-mirror, rollback, R2, hash, AI-indexing, and active-version audit. This count is
-expected to advance through the existing scheduled jobs; it is not accelerated
+Two initial jobs used unique immutable Worker preview URLs, promoted the exact
+verified version, completed inside 1,800 seconds, and passed the subsequent
+production, mirror, rollback, R2, hash, AI-indexing, and active-version audit.
+That segment was then invalidated when `origin/main` advanced during a running
+job and the promotion freshness guard correctly refused the stale checkout.
+The authoritative clean-window marker restarted at
+`2026-08-01T11:26:48Z` with a counter of zero. The failed row and earlier
+evidence remain in the compact summaries but are outside the new audit window.
+The count advances only through normal scheduled jobs; it is not accelerated
 with synthetic uploads.
 
 The current Cloudflare token can read DNS, Worker routes, and Worker Custom

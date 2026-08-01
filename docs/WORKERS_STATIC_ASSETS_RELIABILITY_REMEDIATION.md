@@ -7,6 +7,12 @@ The post-Stage-5 reliability remediation was activated at
 Production routing, the active Worker deployment, Pages, DigitalOcean, R2,
 backup cadence, and retention were not changed during activation.
 
+The authoritative clean-window marker was restarted at
+`2026-08-01T11:26:48Z` after an operational deployment invalidated the first
+two-job segment. The reason and fail-closed result are recorded below. No
+production route, active Worker version, Pages project, mirror policy, backup,
+or retention setting changed during the restart.
+
 Stage 6 remains blocked until both of these independent conditions pass:
 
 1. The fresh post-fix validation window described below is clean.
@@ -132,9 +138,24 @@ R2 alone skipped its already-verified daily live sync; Pages rollback remained
 current. The subsequent read-only audit passed every production, mirror,
 rollback, hash, AI-indexing, R2, and active-version check.
 
-The live counter is therefore 2 of the required 10 jobs. The audit's only
-non-passing result is the expected incomplete time/count gate, not a health
-failure.
+The following `:15` job uploaded and fully verified a third distinct immutable
+candidate, but a Stage 6 readiness commit advanced `origin/main` while that job
+was already running. The promotion process correctly rechecked repository
+freshness and refused to promote because hostedopen's checkout still held the
+previous commit. The whole job exited with status one and reset the counter to
+zero. The previously active production Worker continued returning `200`,
+search `302`, missing-path `404`, and GPTBot `200`; the unpromoted candidate
+never received production traffic.
+
+This was an operator sequencing error, not a preview, upload, verifier, or
+production-serving failure. The Stage 6 commit was then fast-forwarded only
+while the deployment lock was idle, the complete hosted suite passed, and
+`PAGES_ROLLBACK_MAINTENANCE_ENABLED=true` was added explicitly without
+changing behavior. The clean marker and counter were restarted after that
+failed row, at `2026-08-01T11:26:48Z`. Existing summaries and the failure row
+remain intact. Repository publication and hosted checkout changes must now be
+performed together while holding the deployment lock; advancing only
+`origin/main` during a job intentionally triggers the freshness guard.
 
 The first live run also demonstrated that Wrangler's file sink receives debug
 records independently of the configured console level. That 7.4 MB raw file
@@ -146,11 +167,13 @@ symlink intact, created no replacement debug file, and grew the bounded main
 `update.log` only to approximately 69 KB. Main deployment errors remain
 captured there.
 
-Two read-only one-shot audits are installed in hostedopen's user crontab:
+Three read-only one-shot audits are installed in hostedopen's user crontab:
 
-- Smoke audit: `2026-08-01T15:10:00Z`, after enough 30-minute jobs should exist
+- Recovery audit: `2026-08-01T12:12:00Z`, after the first normal post-restart
+  job should restore production and Pages rollback hashes.
+- Smoke audit: `2026-08-01T17:05:00Z`, after enough 30-minute jobs should exist
   to satisfy the 10-job count.
-- Full audit: `2026-08-02T11:05:00Z`, after more than 24 hours and at least 48
+- Full audit: `2026-08-02T12:05:00Z`, after more than 24 hours and at least 48
   scheduled jobs should exist.
 
 Each audit removes only its own tagged crontab entry after running. Neither
@@ -159,9 +182,12 @@ retention.
 
 ## Fresh validation gates
 
-Activation reset only `logs/cfassets-shadow-consecutive-successes` to zero and
-wrote `logs/cfassets-remediation-start-utc`. Existing historical summaries were
-not truncated or rewritten.
+Activation, and the later operational restart described above, reset only
+`logs/cfassets-shadow-consecutive-successes` to zero and wrote
+`logs/cfassets-remediation-start-utc`. Existing historical summaries were not
+truncated or rewritten. The full audit filters every job, candidate, and
+promotion by the current marker, so the invalidated segment cannot be mistaken
+for part of the new clean window.
 
 ### Smoke gate
 
