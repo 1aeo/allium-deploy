@@ -26,6 +26,18 @@ export CF_ASSETS_WORKER_NAME=1aeo-metrics-assets-stage2
 # shellcheck source=../scripts/run-stage6-worker-domain-cutover.sh
 source "$ROOT_DIR/scripts/run-stage6-worker-domain-cutover.sh"
 
+# shellcheck disable=SC2034
+CLOUDFLARE_API_TOKEN=worker-token
+# shellcheck disable=SC2034
+CLOUDFLARE_PAGES_API_TOKEN=pages-token
+[[ "$(api_token_for_path /zones/zone-id/workers/routes)" == worker-token ]] \
+    || fail_test "zone route API did not select the Worker credential"
+[[ "$(api_token_for_path /accounts/account-id/workers/domains)" == worker-token ]] \
+    || fail_test "Worker domain API did not select the Worker credential"
+[[ "$(api_token_for_path /accounts/account-id/pages/projects/project/domains)" == pages-token ]] \
+    || fail_test "Pages API did not select the Pages credential"
+pass "Stage 6 keeps Worker and Pages credentials least-privilege and path-scoped"
+
 require_safe_inputs
 original_site_url="$SITE_URL"
 SITE_URL=http://metrics.1aeo.com

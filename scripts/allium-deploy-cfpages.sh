@@ -190,9 +190,16 @@ PAGES_BUILD_OUTPUT_DIR="${PAGES_BUILD_OUTPUT_DIR:-public}"
 FAILOVER_ORIGIN_URL="${FAILOVER_ORIGIN_URL:-}"
 CACHE_TTL_HTML="${CACHE_TTL_HTML:-1800}"
 CACHE_TTL_STATIC="${CACHE_TTL_STATIC:-86400}"
+CACHE_KEY_ORIGIN="${CACHE_KEY_ORIGIN:-${SITE_URL:-https://metrics.example.com}}"
 PURGE_SECRET="${PURGE_SECRET:-}"
 SOURCE_EVENTS_ENABLED="${SOURCE_EVENTS_ENABLED:-false}"
 SOURCE_EVENTS_DATASET="${SOURCE_EVENTS_DATASET:-allium_source_events}"
+
+if [[ ! "$CACHE_KEY_ORIGIN" =~ ^https://[a-z0-9][a-z0-9.-]*[a-z0-9]/?$ ]]; then
+    echo "❌ CACHE_KEY_ORIGIN must be an HTTPS origin without a path, query, or fragment"
+    exit 1
+fi
+CACHE_KEY_ORIGIN="${CACHE_KEY_ORIGIN%/}"
 
 # Build conditional sections
 R2_BUCKET_SECTION=""
@@ -228,6 +235,7 @@ sed -e "s|{{PAGES_PROJECT_NAME}}|${PAGES_PROJECT_NAME}|g" \
     -e "s|{{FAILOVER_ORIGIN_URL}}|${FAILOVER_ORIGIN_URL}|g" \
     -e "s|{{CACHE_TTL_HTML}}|${CACHE_TTL_HTML}|g" \
     -e "s|{{CACHE_TTL_STATIC}}|${CACHE_TTL_STATIC}|g" \
+    -e "s|{{CACHE_KEY_ORIGIN}}|${CACHE_KEY_ORIGIN}|g" \
     -e "s|{{PURGE_SECRET}}|${PURGE_SECRET}|g" \
     "$TEMPLATE_FILE" > "$OUTPUT_FILE.tmp"
 

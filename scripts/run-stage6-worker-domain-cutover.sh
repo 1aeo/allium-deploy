@@ -80,32 +80,59 @@ require_safe_inputs() {
 }
 
 load_cloudflare_token() {
-    local token_file
-    if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-        return 0
+    local token_file pages_token_file
+    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+        for token_file in \
+            "$HOME/.config/cloudflare/workers_api_token" \
+            "$HOME/.config/cloudflare/api_token"; do
+            if [[ -f "$token_file" ]]; then
+                # shellcheck disable=SC1090
+                source "$token_file"
+                break
+            fi
+        done
     fi
-    for token_file in \
-        "$HOME/.config/cloudflare/workers_api_token" \
-        "$HOME/.config/cloudflare/api_token"; do
-        if [[ -f "$token_file" ]]; then
-            # shellcheck disable=SC1090
-            source "$token_file"
-            break
-        fi
-    done
     [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] \
         || fail "Cloudflare API token is unavailable"
-    export CLOUDFLARE_API_TOKEN
+
+    # Pages deployment has historically used its own least-privilege token.
+    # Keep the broader Worker/DNS/route credential separate and select the
+    # Pages token only for /pages/ API paths.
+    if [[ -z "${CLOUDFLARE_PAGES_API_TOKEN:-}" ]]; then
+        pages_token_file="$HOME/.config/cloudflare/api_token"
+        if [[ -f "$pages_token_file" ]]; then
+            CLOUDFLARE_PAGES_API_TOKEN=$(
+                unset CLOUDFLARE_API_TOKEN
+                # shellcheck disable=SC1090
+                source "$pages_token_file"
+                printf '%s' "${CLOUDFLARE_API_TOKEN:-}"
+            )
+        fi
+    fi
+    CLOUDFLARE_PAGES_API_TOKEN="${CLOUDFLARE_PAGES_API_TOKEN:-$CLOUDFLARE_API_TOKEN}"
+    [[ -n "$CLOUDFLARE_PAGES_API_TOKEN" ]] \
+        || fail "Cloudflare Pages API token is unavailable"
+    export CLOUDFLARE_API_TOKEN CLOUDFLARE_PAGES_API_TOKEN
+}
+
+api_token_for_path() {
+    local path="$1"
+    if [[ "$path" == /accounts/*/pages/* ]]; then
+        printf '%s' "$CLOUDFLARE_PAGES_API_TOKEN"
+    else
+        printf '%s' "$CLOUDFLARE_API_TOKEN"
+    fi
 }
 
 cf_api() {
     local method="$1"
     local path="$2"
     local body="${3:-}"
-    local response_file http_code
+    local response_file http_code authorization_token
     response_file=$(mktemp)
+    authorization_token=$(api_token_for_path "$path")
     local args=(--max-time 60 -sS -o "$response_file" -w '%{http_code}'
-        -X "$method" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+        -X "$method" -H "Authorization: Bearer $authorization_token"
         -H 'Content-Type: application/json')
     if [[ -n "$body" ]]; then
         args+=(-d "$body")

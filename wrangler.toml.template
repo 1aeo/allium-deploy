@@ -27,6 +27,11 @@ FAILOVER_ORIGIN_URL = "{{FAILOVER_ORIGIN_URL}}"
 CACHE_TTL_HTML = "{{CACHE_TTL_HTML}}"
 CACHE_TTL_STATIC = "{{CACHE_TTL_STATIC}}"
 
+# Use one cache namespace key for the production and direct Pages hostnames.
+# This lets the direct rollback audit exercise the exact key purged for
+# production rollback without adding purge requests.
+CACHE_KEY_ORIGIN = "{{CACHE_KEY_ORIGIN}}"
+
 # Cloudflare CDN cache purge secret
 PURGE_SECRET = "{{PURGE_SECRET}}"
 

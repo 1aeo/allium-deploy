@@ -41,9 +41,25 @@ function normalizePath(params) {
   return path;
 }
 
-function getCacheKey(request) {
+function getCacheKey(request, env) {
   const url = new URL(request.url);
-  return new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
+  let cacheOrigin = url.origin;
+
+  if (env.CACHE_KEY_ORIGIN) {
+    try {
+      const configured = new URL(env.CACHE_KEY_ORIGIN);
+      if (configured.protocol === 'https:' && configured.username === '' &&
+          configured.password === '' && configured.pathname === '/' &&
+          configured.search === '' && configured.hash === '') {
+        cacheOrigin = configured.origin;
+      }
+    } catch {
+      // A malformed optional setting must not affect content availability.
+      // The deploy generator validates it; fall back to the request origin.
+    }
+  }
+
+  return new Request(`${cacheOrigin}${url.pathname}`, { method: 'GET' });
 }
 
 function getRouteCategory(path) {
@@ -261,7 +277,7 @@ export async function onRequest(context) {
 
   // Check edge cache first
   const cache = caches.default;
-  const cacheKey = getCacheKey(request);
+  const cacheKey = getCacheKey(request, env);
   const cached = await cache.match(cacheKey);
 
   if (cached) {
