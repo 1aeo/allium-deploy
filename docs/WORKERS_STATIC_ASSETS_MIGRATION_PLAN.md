@@ -1,7 +1,8 @@
 # Allium Workers Static Assets Migration Plan
 
-**Status:** Approved plan; Stages 1–3 are complete; the Stage 4 seven-day
-production soak is active from `2026-07-28T02:56:35Z`
+**Status:** Approved plan; Stages 1–5 are active; the Stage 4 seven-day
+production soak continues from `2026-07-28T02:56:35Z`. A fresh reliability
+validation window started at `2026-08-01T09:57:20Z` before Stage 6.
 
 **Approved:** 2026-07-26
 
@@ -24,6 +25,10 @@ post-cutover control-plane state are tracked in
 The guarded automatic-promotion implementation, failure matrix, activation
 controls, tests, and seven-day soak boundary are tracked in
 [`WORKERS_STATIC_ASSETS_STAGE4_READINESS.md`](WORKERS_STATIC_ASSETS_STAGE4_READINESS.md).
+
+The immutable-preview, bounded-retry, log-containment remediation and its fresh
+10-build/24-hour gates are tracked in
+[`WORKERS_STATIC_ASSETS_RELIABILITY_REMEDIATION.md`](WORKERS_STATIC_ASSETS_RELIABILITY_REMEDIATION.md).
 
 ## Decisions that apply to every stage
 
@@ -685,9 +690,10 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] Production candidate passes preview health gate.
 - [x] Production switches 100% to the Worker route.
 - [x] Immediate two-hour production checks pass.
-- [ ] First 24 production hours and at least 48 Stage 4 jobs pass the split
+- [x] First 24 production hours and at least 48 Stage 4 jobs pass the split
   acceptance gate with current R2 frequency unchanged.
-- [ ] R2 live synchronization changes to daily with retry-safe markers.
+- [x] R2 live synchronization changes to daily with retry-safe markers.
+- [ ] Post-remediation 10-build and 24-hour clean validation gates pass.
 - [ ] Seven-day production soak passes before Pages or rollback machinery is
   retired.
 - [ ] Pages rollback window completes.
