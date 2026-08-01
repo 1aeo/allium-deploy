@@ -30,6 +30,10 @@ CHECKERS="${DO_RCLONE_CHECKERS:-80}"
 # the pipeline full. This does not disable rclone's post-upload integrity HEAD.
 TPS_LIMIT="${DO_RCLONE_TPS_LIMIT:-120}"
 TPS_LIMIT_BURST="${DO_RCLONE_TPS_LIMIT_BURST:-1}"
+# DigitalOcean recommends several small parallel connections. Avoid placing all
+# 56 transfer workers behind one long-lived HTTP/2 session, whose observed
+# throughput can collapse while the host itself remains idle.
+S3_DISABLE_HTTP2="${DO_RCLONE_DISABLE_HTTP2:-true}"
 # The retained _backups tree is much larger than the hot mirror. Disabling
 # ListR lets rclone prune that excluded directory instead of recursively
 # enumerating every retained backup object on each scheduled sync.
@@ -96,6 +100,7 @@ log "🌊 DigitalOcean Spaces Upload"
 log "   Bucket: $DO_BUCKET_NAME ($DO_REGION)"
 log "   Parallel: $TRANSFERS transfers, $CHECKERS checkers"
 log "   Transaction rate: $TPS_LIMIT operations/second, burst $TPS_LIMIT_BURST"
+log "   S3 HTTP/2 disabled: $S3_DISABLE_HTTP2"
 if [[ "$DO_USE_CDN" == "true" ]]; then
     log "   Mode: CDN (faster, may cache up to 1hr)"
 else

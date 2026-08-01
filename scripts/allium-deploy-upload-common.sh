@@ -40,12 +40,14 @@ setup_common_vars() {
     RCLONE_FAST_LIST="${RCLONE_FAST_LIST:-true}"
     TPS_LIMIT="${RCLONE_TPS_LIMIT:-0}"
     TPS_LIMIT_BURST="${RCLONE_TPS_LIMIT_BURST:-1}"
+    S3_DISABLE_HTTP2="${RCLONE_S3_DISABLE_HTTP2:-false}"
     
     DAILY_LOCAL_BACKUP="${DAILY_LOCAL_BACKUP:-true}"
 }
 
 build_rclone_opts() {
     local fast_list_opt=""
+    local s3_http2_opt=""
 
     case "$RCLONE_FAST_LIST" in
         true) fast_list_opt="--fast-list" ;;
@@ -64,10 +66,18 @@ build_rclone_opts() {
         echo "RCLONE_TPS_LIMIT_BURST must be a positive integer (got: $TPS_LIMIT_BURST)" >&2
         return 2
     fi
+    case "$S3_DISABLE_HTTP2" in
+        true) s3_http2_opt="--s3-disable-http2" ;;
+        false) ;;
+        *)
+            echo "RCLONE_S3_DISABLE_HTTP2 must be true or false (got: $S3_DISABLE_HTTP2)" >&2
+            return 2
+            ;;
+    esac
 
     # _headers is parsed by Workers Static Assets and must not become an
     # object in the DO or R2 mirrors.
-    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK --tpslimit=$TPS_LIMIT --tpslimit-burst=$TPS_LIMIT_BURST $fast_list_opt --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
+    echo "--transfers=$TRANSFERS --checkers=$CHECKERS --buffer-size=$BUFFER_SIZE --s3-upload-concurrency=$S3_CONCURRENCY --s3-chunk-size=$S3_CHUNK --tpslimit=$TPS_LIMIT --tpslimit-burst=$TPS_LIMIT_BURST $s3_http2_opt $fast_list_opt --exclude=_headers --stats=10s --stats-one-line --log-level=NOTICE --stats-log-level=NOTICE --retries=5 --retries-sleep=2s --low-level-retries=10"
 }
 
 # --- Backup Functions ---

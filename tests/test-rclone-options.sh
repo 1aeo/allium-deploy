@@ -15,6 +15,7 @@ S3_CONCURRENCY=2
 S3_CHUNK=8M
 TPS_LIMIT=120
 TPS_LIMIT_BURST=1
+S3_DISABLE_HTTP2=true
 
 RCLONE_FAST_LIST=true
 opts=$(build_rclone_opts)
@@ -28,6 +29,10 @@ opts=$(build_rclone_opts)
 }
 [[ " $opts " == *" --tpslimit-burst=1 "* ]] || {
     echo "expected configured transaction-rate burst" >&2
+    exit 1
+}
+[[ " $opts " == *" --s3-disable-http2 "* ]] || {
+    echo "expected configured S3 HTTP/2 disable flag" >&2
     exit 1
 }
 
@@ -59,6 +64,20 @@ if build_rclone_opts >/dev/null 2>&1; then
 fi
 TPS_LIMIT_BURST=1
 
+S3_DISABLE_HTTP2=invalid
+if build_rclone_opts >/dev/null 2>&1; then
+    echo "invalid RCLONE_S3_DISABLE_HTTP2 should fail closed" >&2
+    exit 1
+fi
+
+S3_DISABLE_HTTP2=false
+opts=$(build_rclone_opts)
+[[ " $opts " != *" --s3-disable-http2 "* ]] || {
+    echo "did not expect S3 HTTP/2 disable flag when configured false" >&2
+    exit 1
+}
+S3_DISABLE_HTTP2=true
+
 grep -Fq 'RCLONE_FAST_LIST="${DO_RCLONE_FAST_LIST:-false}"' \
     "$ROOT_DIR/scripts/allium-deploy-upload-do.sh" || {
         echo "DigitalOcean must default to directory traversal" >&2
@@ -67,6 +86,11 @@ grep -Fq 'RCLONE_FAST_LIST="${DO_RCLONE_FAST_LIST:-false}"' \
 grep -Fq 'TPS_LIMIT="${DO_RCLONE_TPS_LIMIT:-120}"' \
     "$ROOT_DIR/scripts/allium-deploy-upload-do.sh" || {
         echo "DigitalOcean must default to the bounded transaction rate" >&2
+        exit 1
+    }
+grep -Fq 'S3_DISABLE_HTTP2="${DO_RCLONE_DISABLE_HTTP2:-true}"' \
+    "$ROOT_DIR/scripts/allium-deploy-upload-do.sh" || {
+        echo "DigitalOcean must default to independent HTTP/1.1 connections" >&2
         exit 1
     }
 
