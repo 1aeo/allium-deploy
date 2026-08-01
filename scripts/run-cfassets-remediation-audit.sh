@@ -171,12 +171,16 @@ for token_file in \
 done
 export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
-export WRANGLER_LOG=error
+# `deployments status --json` is emitted at Wrangler's normal log level. It is
+# captured and parsed below; the single bounded diagnostic path still applies.
+export WRANGLER_LOG=log
 export WRANGLER_LOG_PATH="$DEPLOY_DIR/logs/wrangler-error.log"
 export WRANGLER_LOG_SANITIZE=true
 if deployment_status=$(cd "$DEPLOY_DIR" && corepack pnpm exec wrangler deployments status \
-    --config "$DEPLOY_DIR/wrangler.assets.toml" 2>&1) &&
-    grep -Fq "(100%) $latest_version" <<< "$deployment_status"; then
+    --json --config "$DEPLOY_DIR/wrangler.assets.toml" 2>/dev/null) &&
+    jq -e --arg version "$latest_version" \
+        '.versions | length == 1 and .[0].version_id == $version and .[0].percentage == 100' \
+        <<< "$deployment_status" >/dev/null; then
     pass "latest verified version serves 100% of production"
 else
     fail "Cloudflare production version does not match the latest promotion"
