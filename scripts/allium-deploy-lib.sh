@@ -26,6 +26,30 @@ restore_env_overrides() {
     done
 }
 
+# Wrangler always writes every debug-level message to WRANGLER_LOG_PATH,
+# regardless of the WRANGLER_LOG console threshold. Point the default file at
+# the null device while retaining error-level console output in update.log.
+prepare_null_log_sink() {
+    local sink_path="$1"
+    local target=""
+
+    mkdir -p "$(dirname "$sink_path")"
+    if [[ -L "$sink_path" ]]; then
+        target=$(readlink "$sink_path")
+        [[ "$target" == /dev/null ]] || {
+            printf 'Refusing Wrangler sink symlink %s -> %s; expected /dev/null\n' \
+                "$sink_path" "$target" >&2
+            return 1
+        }
+        return 0
+    fi
+    if [[ -e "$sink_path" ]]; then
+        printf 'Refusing to replace existing Wrangler sink path: %s\n' "$sink_path" >&2
+        return 1
+    fi
+    ln -s /dev/null "$sink_path"
+}
+
 run_with_timeout() {
     local seconds="$1"
     shift

@@ -77,7 +77,8 @@ export CF_ASSETS_VERIFY_CURL_TIMEOUT="${CF_ASSETS_VERIFY_CURL_TIMEOUT:-60}"
 CF_ASSETS_UPLOAD_MAX_ATTEMPTS="${CF_ASSETS_UPLOAD_MAX_ATTEMPTS:-3}"
 CF_ASSETS_UPLOAD_RETRY_DELAY="${CF_ASSETS_UPLOAD_RETRY_DELAY:-15}"
 WRANGLER_LOG="${WRANGLER_LOG:-error}"
-WRANGLER_LOG_PATH="${WRANGLER_LOG_PATH:-$DEPLOY_DIR/logs/wrangler-error.log}"
+WRANGLER_DEFAULT_LOG_PATH="$DEPLOY_DIR/logs/wrangler-debug-sink.log"
+WRANGLER_LOG_PATH="${WRANGLER_LOG_PATH:-$WRANGLER_DEFAULT_LOG_PATH}"
 WRANGLER_LOG_SANITIZE="${WRANGLER_LOG_SANITIZE:-true}"
 
 log() {
@@ -303,6 +304,9 @@ if [[ "$MODE" == "--promote" ]]; then
     }
     assert_fresh_checkout
     load_cloudflare_token
+    if [[ "$WRANGLER_LOG_PATH" == "$WRANGLER_DEFAULT_LOG_PATH" ]]; then
+        prepare_null_log_sink "$WRANGLER_LOG_PATH"
+    fi
     promote_verified_version
     exit 0
 fi
@@ -319,6 +323,9 @@ command -v jq >/dev/null 2>&1 || {
 assert_fresh_checkout
 load_cloudflare_token
 mkdir -p "$DEPLOY_DIR/logs"
+if [[ "$WRANGLER_LOG_PATH" == "$WRANGLER_DEFAULT_LOG_PATH" ]]; then
+    prepare_null_log_sink "$WRANGLER_LOG_PATH"
+fi
 
 UPLOAD_OUTPUT=$(mktemp)
 UPLOAD_METADATA=$(mktemp)

@@ -18,6 +18,8 @@ if [[ ! -f "$DEPLOY_DIR/config.env" ]]; then
 fi
 # shellcheck disable=SC1091
 source "$DEPLOY_DIR/config.env"
+# shellcheck source=./scripts/allium-deploy-lib.sh
+source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
 START_FILE="${CF_REMEDIATION_START_FILE:-$DEPLOY_DIR/logs/cfassets-remediation-start-utc}"
 STARTED_UTC=$(cat "$START_FILE" 2>/dev/null || true)
@@ -174,8 +176,11 @@ export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 # `deployments status --json` is emitted at Wrangler's normal log level. It is
 # captured and parsed below; the single bounded diagnostic path still applies.
 export WRANGLER_LOG=log
-export WRANGLER_LOG_PATH="$DEPLOY_DIR/logs/wrangler-error.log"
+export WRANGLER_LOG_PATH="$DEPLOY_DIR/logs/wrangler-debug-sink.log"
 export WRANGLER_LOG_SANITIZE=true
+if ! prepare_null_log_sink "$WRANGLER_LOG_PATH"; then
+    fail "could not prepare Wrangler's debug-log sink"
+fi
 if deployment_status=$(cd "$DEPLOY_DIR" && corepack pnpm exec wrangler deployments status \
     --json --config "$DEPLOY_DIR/wrangler.assets.toml" 2>/dev/null) &&
     jq -e --arg version "$latest_version" \

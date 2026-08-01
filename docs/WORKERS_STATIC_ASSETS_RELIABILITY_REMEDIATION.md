@@ -65,11 +65,14 @@ version at 100%.
 
 ### Bounded logs
 
-Wrangler runs with sanitized, error-level diagnostics written to one path:
-`logs/wrangler-error.log`. That file rotates at 8 MiB and retains two compressed
-archives by default. `logs/update.log` rotates at 32 MiB and retains three
-compressed archives by default. The compact candidate, job, promotion, R2,
-and backup markers are separate and are not rotated by this mechanism.
+Wrangler runs with sanitized, error-level console diagnostics. Live testing
+proved that Wrangler writes every debug-level message to `WRANGLER_LOG_PATH`
+regardless of that console threshold, so the managed default path is
+`logs/wrangler-debug-sink.log`, a guarded symlink to `/dev/null`. Actual
+Wrangler errors remain in `update.log`, which rotates at 32 MiB and retains
+three compressed archives. A deliberately configured real Wrangler debug file
+still has an 8 MiB/two-archive bound. The compact candidate, job, promotion,
+R2, and backup markers are separate and are not rotated by this mechanism.
 
 The legacy per-command debug directory was removed only after preserving:
 

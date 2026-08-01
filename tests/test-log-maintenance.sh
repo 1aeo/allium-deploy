@@ -3,6 +3,8 @@
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=../scripts/allium-deploy-lib.sh
+source "$REPO_DIR/scripts/allium-deploy-lib.sh"
 mkdir -p "$REPO_DIR/logs"
 TMP_DIR=$(mktemp -d "$REPO_DIR/logs/test-maintenance.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -18,6 +20,17 @@ pass() {
 
 UPDATE_LOG="$TMP_DIR/update.log"
 WRANGLER_LOG="$TMP_DIR/wrangler-error.log"
+
+NULL_SINK="$TMP_DIR/wrangler-debug-sink.log"
+prepare_null_log_sink "$NULL_SINK"
+[[ -L "$NULL_SINK" && "$(readlink "$NULL_SINK")" == /dev/null ]] \
+    || fail "Wrangler null sink was not created safely"
+printf 'do-not-replace' > "$TMP_DIR/existing.log"
+if prepare_null_log_sink "$TMP_DIR/existing.log" >/dev/null 2>&1; then
+    fail "existing Wrangler log path was replaced"
+fi
+pass "Wrangler debug sink is null-backed and refuses existing paths"
+
 printf '1234567890' > "$UPDATE_LOG"
 printf 'abcdefghij' > "$WRANGLER_LOG"
 
