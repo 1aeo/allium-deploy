@@ -13,27 +13,32 @@ until both independent gates pass:
 Two initial jobs used unique immutable Worker preview URLs, promoted the exact
 verified version, completed inside 1,800 seconds, and passed the subsequent
 production, mirror, rollback, R2, hash, AI-indexing, and active-version audit.
-That segment was then invalidated when `origin/main` advanced during a running
-job and the promotion freshness guard correctly refused the stale checkout.
-The authoritative clean-window marker restarted at
-`2026-08-01T11:26:48Z` with a counter of zero. The failed row and earlier
-evidence remain in the compact summaries but are outside the new audit window.
+That segment was invalidated when `origin/main` advanced during a running job
+and the promotion freshness guard correctly refused the stale checkout. A
+subsequent recovery exposed and corrected the direct-Pages cache-key mismatch
+documented in the remediation record. The deployed correction passed a live
+two-object `MISS`/`HIT`/purge/`MISS` trial. The authoritative clean-window
+marker restarted at `2026-08-01T12:02:27Z` with a counter of zero. All earlier
+evidence remains in the compact summaries but is outside the new audit window.
 The count advances only through normal scheduled jobs; it is not accelerated
 with synthetic uploads.
 
-The current Cloudflare token can read DNS, Worker routes, and Worker Custom
-Domains, but the Pages domains endpoint returns HTTP 403. Add account-level
-**Cloudflare Pages / Edit** (called Pages Write by the API) to the existing
-short-lived credential before Stage 6. Do not put the token in Git, this file,
-or chat. A successful Pages `GET` proves API access but cannot itself prove the
-destructive delete permission; the reviewed token setting remains required.
+Stage 6 now uses two existing credentials instead of broadening one token. The
+mode-`600` Worker/DNS credential handles account discovery, Worker Custom
+Domains, DNS, and Worker routes. The separate mode-`600` Pages deployment
+credential is selected only for the account Pages API. Neither token is
+stored in Git or printed. Read-only API checks passed for both paths on
+`2026-08-01`; a Pages `GET` proves API access but does not replace the reviewed
+Pages Edit scope required by live execution.
 
 ## Codebase and controls
 
 All Stage 6 changes are in `1aeo/allium-deploy`:
 
 - `scripts/run-stage6-worker-domain-cutover.sh` implements read-only preflight
-  and the explicitly confirmed live transition.
+  and the explicitly confirmed live transition. Its API token selector sends
+  Pages paths only to the Pages credential and all other paths only to the
+  Worker/DNS credential.
 - `scripts/run-cfassets-remediation-audit.sh` can reuse a deployment lock held
   by the Stage 6 caller, preventing a deadlock while retaining stable audit
   inputs.
@@ -85,6 +90,18 @@ The known pre-cutover control-plane shape is:
 
 Any missing, duplicated, stale, already-migrated, or unexpected object fails
 closed before mutation.
+
+The read-only preflight run at `2026-08-01T12:09:45Z` authenticated both
+credential paths and accepted the exact DNS, route, Worker-domain, and Pages
+domain state. It reported exactly two blockers: the seven-day boundary and the
+fresh 10-build/24-hour evidence window. It reported no authorization or
+control-plane-shape blocker.
+
+The first normal job in that final evidence window completed successfully at
+`2026-08-01T12:33:21Z`, promoted its exact verified immutable candidate, and
+left the counter at 1 of 10. Its subsequent audit passed every live health,
+mirror, rollback, R2, and active-version check; only the intentionally
+incomplete count remained.
 
 ## Reviewed live sequence
 

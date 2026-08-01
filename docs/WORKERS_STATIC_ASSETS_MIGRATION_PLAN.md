@@ -1,10 +1,11 @@
 # Allium Workers Static Assets Migration Plan
 
 **Status:** Approved plan; Stages 1–5 are active; the Stage 4 seven-day
-production soak continues from `2026-07-28T02:56:35Z`. A fresh reliability
-validation window restarted at `2026-08-01T11:26:48Z` before Stage 6 after an
-operator-induced checkout freshness refusal safely invalidated the earlier
-two-job segment.
+production soak continues from `2026-07-28T02:56:35Z`. After a guarded
+checkout refusal and a separately discovered direct-Pages cache-key mismatch,
+the deployed correction passed a live purge trial and the final fresh
+reliability window restarted at `2026-08-01T12:02:27Z`. Stage 6 remains gated
+on that clean 10-build/24-hour evidence plus the original seven-day boundary.
 
 **Approved:** 2026-07-26
 
@@ -40,7 +41,7 @@ rollback behavior, and tests are tracked in
 
 - Allium is the priority. Do not migrate any non-Allium project until Allium has completed its rollout and billing-validation stages.
 - Keep AI crawling and indexing enabled on production. Do not block AI bots merely to reduce request volume. Preview and staging hostnames must be `noindex, nofollow` so they do not create duplicate indexed sites.
-- Keep the architecture serverless. Do not add a $24 Droplet or another always-on server.
+- Keep the architecture serverless. Do not add a Droplet or another always-on server.
 - Make Cloudflare Workers Static Assets the production serving layer.
 - Keep DigitalOcean Spaces synchronized after every successful Allium build as the hot independent mirror.
 - Reduce the R2 live content synchronization to once daily only after the Workers production cutover and soak succeed.
@@ -602,9 +603,13 @@ However, the existing daily R2 remote recovery snapshot also copies approximatel
 
 `29,350 * 2 * 30 = 1,761,000` live-plus-backup object mutations per 30-day month.
 
-After the one-million Class A allowance and Cloudflare billing-unit rounding, this likely produces approximately $4.50 per month in R2 Class A charges, plus small list or verification usage. This is still dramatically below the current approximately $153 Class A invoice line.
-
-Keeping daily snapshots without retention changes means storage continues growing by approximately 4.2 GiB per day, or roughly 126 GiB per 30-day month. At R2 Standard storage pricing, that is roughly $1.89 more full-month storage cost for every additional retained 126 GB, with first-month average accrual depending on daily billing. DigitalOcean backup storage grows similarly and is billed according to Spaces storage allowances and overage rates.
+The live-plus-backup mutation count remains the primary R2 Class A cost driver,
+while retained daily snapshots remain the primary storage-growth driver.
+Cloudflare billing-unit rounding and storage byte-hours must be applied to the
+measured account data rather than inferred from a single deployment. Exact
+invoice values and account-specific projections are private billing evidence
+and must not be committed to this public repository. DigitalOcean backup
+storage grows similarly and must be measured through its private billing data.
 
 This continuing growth is why retention deserves a later inventory and restore-value review. It is not authorization to delete or shorten retention.
 
@@ -657,21 +662,21 @@ After the migration is accepted:
 
 No cleanup command may delete a broad directory, bucket, backup collection, or production project. Resolve and verify every cleanup target explicitly before removal.
 
-### Expected initial steady-state cost
+### Billing-validation policy
 
-Based on the June Cloudflare and DigitalOcean invoices and current published prices:
+Workers Static Assets is the cost-optimal primary serving layer because valid
+static requests are free and unlimited. DO remains the per-build mirror
+because it has no per-object operation charge. R2 remains the daily recovery
+copy because its operation pricing makes every-build replication comparatively
+expensive. No always-on compute is added.
 
-- Workers Paid: approximately $5 per month
-- Existing R2 storage: approximately $25 per month, continuing to grow with retained snapshots
-- Daily live R2 copy plus daily recovery copy: likely approximately $4.50 Class A per month
-- Very small R2 Class B usage because R2 is no longer in the normal serving path
-- Expected Cloudflare total initially around $35–40 per month rather than $195.83
-- DigitalOcean should remain near its storage/base cost and may fall as normal production-serving bandwidth moves away from DO
-- No $24 Droplet or other always-on compute is added
-
-Workers Static Assets is cheaper than either DO or R2 as the primary serving layer because valid static requests are free and unlimited. DO remains the per-build mirror because it has no per-object operation charge. R2 remains the daily recovery copy because its operation pricing makes every-build replication comparatively expensive.
-
-The original cost estimate is a forecast, not a promise. Validate it against a complete post-migration billing month and retain the measured invoice comparison in the repository.
+Validate the architecture against one complete post-migration Cloudflare and
+DigitalOcean billing cycle. Keep invoice totals, account-wide usage,
+calculation worksheets, projections, and sensitivity analysis in the approved
+private billing location rather than this public repository. The public
+execution record may state whether the expected direction and operational
+cost drivers were confirmed, but must not publish account-specific currency
+amounts.
 
 ## Stage 8 — Other projects and retention review
 

@@ -7,11 +7,15 @@ The post-Stage-5 reliability remediation was activated at
 Production routing, the active Worker deployment, Pages, DigitalOcean, R2,
 backup cadence, and retention were not changed during activation.
 
-The authoritative clean-window marker was restarted at
-`2026-08-01T11:26:48Z` after an operational deployment invalidated the first
-two-job segment. The reason and fail-closed result are recorded below. No
-production route, active Worker version, Pages project, mirror policy, backup,
-or retention setting changed during the restart.
+An operational deployment invalidated the first two-job segment, so the marker
+was restarted at `2026-08-01T11:26:48Z`. Recovery then exposed a separate
+direct-Pages cache-key mismatch described below. Commit
+`e83b42c404bebd6386a50150fc6daacf2fc1b7d0` corrected that mismatch, the
+deployed Pages rollback function passed a live cache/purge trial, and the
+authoritative clean-window marker was restarted a final time at
+`2026-08-01T12:02:27Z` with a counter of zero. No production route, active
+Worker service, mirror policy, backup, or retention setting changed during
+either restart.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -157,6 +161,68 @@ remain intact. Repository publication and hosted checkout changes must now be
 performed together while holding the deployment lock; advancing only
 `origin/main` during a job intentionally triggers the freshness guard.
 
+The exact candidate that had already passed its immutable preview gate,
+`cc748779-ed28-43eb-869a-ebed3aee1d42`, was manually promoted at
+`2026-08-01T11:33:42Z` while holding the deployment lock. This restored the
+Worker, local output, and DigitalOcean mirror to the same build without
+pretending the manual recovery was a scheduled-job success. The marker moved
+to `2026-08-01T11:35:40Z` and the counter remained zero.
+
+That recovery audit found that the direct `pages.dev` rollback URL could still
+serve the previous cached hashes even after the Pages purge loop reported
+success with zero deletions. The old Pages Function used the incoming request
+origin as its cache key. A direct Pages read therefore used a `pages.dev` key,
+while the purge body correctly named production `metrics.1aeo.com` URLs and
+deleted a different key. This did not affect Worker production traffic, but it
+made direct rollback freshness impossible to prove until the unrelated
+30-minute HTML TTL expired.
+
+Commit `e83b42c404bebd6386a50150fc6daacf2fc1b7d0` adds a validated
+`CACHE_KEY_ORIGIN` generated from `SITE_URL`. Direct Pages reads and
+production-host purge requests now address the same canonical cache entries;
+malformed optional configuration safely falls back to the request origin. A
+unit test proves both the shared key and fallback behavior. The complete
+25-test JavaScript suite and every shell integration test passed on hostedopen
+before the Pages function was deployed at `2026-08-01T12:00:15Z`.
+
+The bounded live trial then proved the deployed behavior for `/` and
+`/search-index.json`:
+
+- Both first reads were `MISS`, served from the DigitalOcean hot mirror, and
+  matched the current generated SHA-256 values.
+- Both second reads were `HIT` with the same current hashes.
+- One authenticated purge naming the two production URLs returned HTTP `200`,
+  `success=true`, `requested=2`, `purged=2`, and no errors.
+- Both post-purge reads returned `MISS` and still matched the current hashes.
+
+The trial completed at `2026-08-01T12:01:50Z`. It proves the existing purge
+works without doubling the URL list or adding extra Pages Function
+invocations. The clean marker was then reset to
+`2026-08-01T12:02:27Z`, ensuring no pre-correction build can satisfy the new
+gate. The preceding normal job, from `2026-08-01T11:45:01Z` through
+`2026-08-01T11:56:40Z`, had otherwise succeeded in 699 seconds, verified and
+promoted version `d59addaf-9c7e-44b0-ae8b-59e8358e0e22`, and demonstrated
+normal recovery from the guarded refusal; it is intentionally outside the
+final clean window.
+
+The first ordinary job after the final marker ran from
+`2026-08-01T12:15:01Z` through `2026-08-01T12:33:21Z`. It completed with status
+zero in 1,100 seconds, inside the 1,800-second cadence limit. R2 alone skipped
+its already-verified daily live sync; DigitalOcean finished its every-build
+mirror in 8 minutes 8 seconds. The Worker phase uploaded and verified the
+unique immutable version `22d316bb-6fbb-413a-b5b5-9a1647e8caba` at
+`https://22d316bb-1aeo-metrics-assets-stage2.ceo-8f4.workers.dev` in 752
+seconds, passed three consecutive complete check sets, and promoted that exact
+version at 100% with status zero. The retained Pages loop deleted one actual
+cached HTML key out of 29,213 requested URLs rather than reporting zero for
+every key.
+
+The read-only audit at `2026-08-01T12:33:34Z` found exactly one expected
+failure: the smoke count was only 1 of 10. Production root, search, missing
+path, GPTBot, generated hashes, DigitalOcean hashes, direct Pages hashes,
+daily R2 configuration and marker, and the exact active Worker version all
+passed. This job is the first row in the authoritative final window.
+
 The first live run also demonstrated that Wrangler's file sink receives debug
 records independently of the configured console level. That 7.4 MB raw file
 was preserved as a verified 1.6 MB gzip, and commit
@@ -167,10 +233,8 @@ symlink intact, created no replacement debug file, and grew the bounded main
 `update.log` only to approximately 69 KB. Main deployment errors remain
 captured there.
 
-Three read-only one-shot audits are installed in hostedopen's user crontab:
+Two read-only one-shot audits are installed in hostedopen's user crontab:
 
-- Recovery audit: `2026-08-01T12:12:00Z`, after the first normal post-restart
-  job should restore production and Pages rollback hashes.
 - Smoke audit: `2026-08-01T17:05:00Z`, after enough 30-minute jobs should exist
   to satisfy the 10-job count.
 - Full audit: `2026-08-02T12:05:00Z`, after more than 24 hours and at least 48
@@ -182,7 +246,8 @@ retention.
 
 ## Fresh validation gates
 
-Activation, and the later operational restart described above, reset only
+Activation, the operational restart, and the final Pages cache-key restart
+described above reset only
 `logs/cfassets-shadow-consecutive-successes` to zero and wrote
 `logs/cfassets-remediation-start-utc`. Existing historical summaries were not
 truncated or rewritten. The full audit filters every job, candidate, and
@@ -265,11 +330,16 @@ the current Pages CNAME and broad Worker route:
    Domain is healthy. Keep the direct Pages deployment dormant for the chosen
    rollback window.
 
-The current API token can inspect and change Worker routes/domains and DNS, but
-the Pages domain endpoint currently returns authorization failure. Before
-Stage 6, add the account-level Cloudflare Pages Edit permission (named Pages
-Write by the API) to the existing short-lived credential without posting the
-token in documentation or chat.
+Stage 6 now keeps two existing least-privilege credentials path-scoped. Worker
+Custom Domain, DNS, and route requests use the Worker/DNS credential; only the
+Pages domains API uses the separate Pages deployment credential. No token is
+stored in Git or emitted by the tool. The read-only preflight at
+`2026-08-01T12:09:45Z` authenticated both API paths and validated the exact
+control-plane shape. Its only blockers were the fixed seven-day boundary and
+the intentionally incomplete fresh smoke/24-hour window. A successful Pages
+`GET` proves current API access but is not by itself a destructive permission
+test; live execution still requires the reviewed Pages Edit scope and the
+explicit hostname confirmation.
 
 No Pages project deletion, backup deletion, or retention reduction is part of
 this remediation or its validation.
