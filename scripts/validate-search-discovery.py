@@ -2,6 +2,7 @@
 """Validate Metrics search-verification and crawler-discovery artifacts."""
 
 import argparse
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import sys
@@ -24,15 +25,25 @@ def fail(message):
     raise ValueError(message)
 
 
-def html_attribute(tag, attribute):
-    """Extract a quoted or unquoted HTML attribute from one start tag."""
-    match = re.search(
-        rf"(?:^|\s){re.escape(attribute)}\s*=\s*"
-        r"(?:([\"'])(.*?)\1|([^\s\"'=<>`]+))",
-        tag,
-        re.I | re.S,
-    )
-    return (match.group(2) or match.group(3)) if match else None
+class SearchMetadataParser(HTMLParser):
+    """Collect decoded robots and canonical metadata from HTML start tags."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.robots_contents = []
+        self.canonicals = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = {name: value or "" for name, value in attrs}
+        if tag == "meta" and attributes.get("name", "").lower() == "robots":
+            self.robots_contents.append(attributes.get("content", ""))
+        elif tag == "link":
+            rel_tokens = attributes.get("rel", "").lower().split()
+            if "canonical" in rel_tokens:
+                self.canonicals.append(attributes.get("href", ""))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
 
 
 def validate_homepage(output_dir, expected_origin):
@@ -46,10 +57,11 @@ def validate_homepage(output_dir, expected_origin):
         if homepage.count(tag) != 1 or head.count(tag) != 1:
             fail(f"{label} verification tag must appear exactly once in <head>")
 
-    for tag in re.findall(r"<meta\b[^>]*>", head, re.I):
-        if (html_attribute(tag, "name") or "").lower() != "robots":
-            continue
-        content = html_attribute(tag, "content") or ""
+    metadata = SearchMetadataParser()
+    metadata.feed(head)
+    metadata.close()
+
+    for content in metadata.robots_contents:
         directives = {
             directive.strip().lower()
             for directive in re.split(r"[\s,]+", content)
@@ -58,11 +70,7 @@ def validate_homepage(output_dir, expected_origin):
         if directives.intersection({"noindex", "nofollow", "none"}):
             fail("homepage robots metadata blocks indexing or following")
 
-    for tag in re.findall(r"<link\b[^>]*>", head, re.I):
-        rel_tokens = (html_attribute(tag, "rel") or "").lower().split()
-        if "canonical" not in rel_tokens:
-            continue
-        canonical = html_attribute(tag, "href") or ""
+    for canonical in metadata.canonicals:
         parsed = urlsplit(canonical)
         if (parsed.scheme or parsed.netloc) and (
             parsed.scheme != "https" or parsed.netloc != expected_origin.netloc
