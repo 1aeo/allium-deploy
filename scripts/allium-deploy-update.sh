@@ -561,6 +561,16 @@ else
     exit 1
 fi
 
+if python3 "$SCRIPT_DIR/validate-search-discovery.py" "$OUTPUT_DIR" "$SITE_URL"; then
+    log "✅ Search verification and crawler discovery artifacts validated"
+else
+    log "❌ Search verification or crawler discovery validation failed"
+    increment_failures
+    rollback_guarded_pulls || ROLLBACK_SUCCESS=false
+    [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
+    exit 1
+fi
+
 # Check for schema version change and auto-deploy search.js if needed
 if command -v jq &>/dev/null && [[ -f "$OUTPUT_DIR/search-index.json" ]]; then
     NEW_SCHEMA_VERSION=$(jq -r '.meta.version // "unknown"' "$OUTPUT_DIR/search-index.json" 2>/dev/null || echo "unknown")
