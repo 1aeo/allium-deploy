@@ -83,16 +83,32 @@ uses 30 operations/second and a shared mutation lock. Same-day execution is a
 quiet no-op, failed snapshots retry hourly, logs remain bounded, and backup
 retention is unchanged.
 
-The current marker is `2026-08-02T08:04:11Z`. Its first scheduled job exited
-zero in 1,108 seconds, used a unique immutable preview, completed the immediate
-DigitalOcean live mirror in 12 minutes 52 seconds, and promoted exact version
-`f7c7244d-811d-4aa0-a45e-0c53d4545849` at 100%. The immediate live audit
-passed every production, mirror, rollback, R2, hash, AI-indexing, and
-active-version check; one of ten was its only expected incomplete condition.
-Replacement one-shot audits are scheduled for `2026-08-02T13:10:00Z` and
-`2026-08-03T08:10:00Z`. All historical evidence remains in the compact
+The DigitalOcean-decoupling window began at `2026-08-02T08:04:11Z`. Three
+scheduled jobs exited zero inside the cadence bound and passed their live
+checks. Its fourth job safely stopped in generation after a newly pulled
+Allium revision stopped emitting four unsupported misc sort variants but left
+old copies in the reused output tree. No publisher or promotion ran, and
+production remained on the previous verified Worker.
+
+Allium commit `e829a5dd2f2431c1d09ef744cb4a5cc97970c9ca` now removes only
+those obsolete base and pagination files. Its full non-slow suite and critical
+checks passed, and a complete lock-held generation against the real reused
+output completed without publication and proved the stale files absent. The
+current marker is therefore `2026-08-02T10:04:15Z`. Replacement one-shot
+audits are scheduled for `2026-08-02T15:10:00Z` and
+`2026-08-03T10:10:00Z`. All historical evidence remains in the compact
 summaries but is outside the current audit window. The count advances only
 through normal scheduled jobs; it is not accelerated with synthetic uploads.
+
+The first normal job in this final window completed successfully from
+`10:15:01Z` through `10:33:40Z`. It pinned the immutable deploy SHA, completed
+the repaired generator and discovery checks, verified and promoted exact
+Worker version `cce8e683-87af-4712-b21d-63db644f6a9d`, completed the
+DigitalOcean mirror and Pages rollback maintenance, and skipped only current
+daily R2/backup work. Its 1,119-second runtime passed the cadence gate. The
+immediate audit passed every live, mirror, rollback, R2, backup-marker,
+AI-indexing, checkout, and active-version check; one of ten was its only
+expected incomplete condition.
 
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom

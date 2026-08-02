@@ -13,10 +13,16 @@ then proved that the unchanged daily DigitalOcean remote snapshot could delay
 the every-build hot mirror past the scheduler cadence. Commit
 `739f2d58fcbaab87abf6e1e18a11aea72ca833da` preserves that daily snapshot in
 an hourly retry-safe runner while removing it from the publication critical
-path. The final validation window began at `2026-08-02T08:04:11Z`; its first
-scheduled job and complete live audit passed. Stage 6 remains gated on the
-replacement 10-build/24-hour/48-job evidence plus the original seven-day
-boundary.
+path. Three subsequent jobs passed before an upstream Allium change exposed
+obsolete sort pages retained in the reused output tree. The failed generator
+never reached publication. Allium commit
+`e829a5dd2f2431c1d09ef744cb4a5cc97970c9ca` performs an exact stale-file
+cleanup; its tests and a complete real-output reproduction passed. The final
+validation window began at `2026-08-02T10:04:15Z`. Its first natural job and
+complete live audit passed in 1,119 seconds with exact candidate-to-promotion
+identity and all mirrors, rollback paths, daily markers, and AI indexing
+healthy. Stage 6 remains gated on the replacement 10-build/24-hour/48-job
+evidence plus the original seven-day boundary.
 
 **Approved:** 2026-07-26
 
@@ -72,7 +78,12 @@ All implementation work belongs in [1aeo/allium-deploy](https://github.com/1aeo/
 
 `/home/aeo1/allium-deploy` on `hostedopen`
 
-The Allium generator in `/home/aeo1/allium` remains unchanged. It continues generating `~/metrics-output` at `:15` and `:45` through the existing cron unless a later, separately reviewed requirement genuinely belongs in the generator.
+The Allium generator in `/home/aeo1/allium` continues generating
+`~/metrics-output` at `:15` and `:45` through the existing cron. The only
+migration-driven generator correction is the exact cleanup of four unsupported
+misc sort variants in Allium commit
+`e829a5dd2f2431c1d09ef744cb4a5cc97970c9ca`; discovery validation and all
+publisher gates remain unchanged.
 
 Primary files and planned responsibilities:
 

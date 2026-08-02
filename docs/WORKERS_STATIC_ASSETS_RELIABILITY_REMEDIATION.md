@@ -32,9 +32,14 @@ and verified without changing its reviewed scope. Three recovery jobs then
 passed, but a fourth exposed a separate mid-job branch-movement race. Commit
 `d0580c4da88c481f36606753276da31ff335b879` now pins one clean, current deploy
 checkout SHA before generation and uses that immutable identity through
-upload and promotion. The current authoritative marker is
-`2026-08-02T06:41:22Z`. No production route, active Worker service, mirror
-policy, backup, or retention setting changed during these restarts.
+upload and promotion. DigitalOcean remote-backup decoupling then restored the
+required scheduler margin. A later Allium generator update exposed stale
+unsupported sort pages left in the reused output tree; the failed generator
+never reached any publisher. Allium commit
+`e829a5dd2f2431c1d09ef744cb4a5cc97970c9ca` removes those exact obsolete files
+before discovery validation. The current authoritative marker is
+`2026-08-02T10:04:15Z`. No production route, active Worker service, mirror
+policy, backup cadence, or retention setting changed during these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -551,13 +556,76 @@ DigitalOcean hot-mirror hash, direct Pages rollback hash, daily R2 marker, and
 exact active-version check. Its sole expected nonzero condition was the new
 window's intentionally incomplete one-of-ten count.
 
-Two replacement read-only one-shot audits target only this final window:
+That window was later invalidated by an Allium generator failure described
+below. Its historical rows remain intact but do not count toward the current
+gate.
 
-- Smoke: `2026-08-02T13:10:00Z`.
-- Full 24-hour/48-job acceptance: `2026-08-03T08:10:00Z`.
+### Reused-output stale-page cleanup
 
-Each new audit removes only its own tagged cron entry. The original seven-day
-boundary remains `2026-08-04T02:56:35Z`.
+The scheduled job beginning `2026-08-02T09:45:01Z` guardedly advanced the
+Allium generator from `64d325be0f2af4943e233dabd5b1e0ce5286b7a0` to
+`932d21f` and pinned deploy commit
+`56e4048cd596e07992e4aa2e69d892ba7a399d29`. The generator failed discovery
+validation in 248 seconds because the reused output tree still contained
+`misc/contacts-by-unique-contact-count.html`, an old page with no canonical
+link. The job stopped before Worker, DigitalOcean, R2, or Pages publication;
+no candidate was uploaded or promoted, and the previous verified production
+Worker remained active.
+
+The upstream change intentionally stopped generating four unsupported misc
+sort combinations but did not remove their base and paginated files from a
+reused output directory. The validator was correct and was not weakened.
+Allium commit `e829a5dd2f2431c1d09ef744cb4a5cc97970c9ca` adds a bounded,
+explicit cleanup for only these obsolete combinations:
+
+- contacts by unique-contact count;
+- contacts by unique-family count;
+- families by unique-contact count; and
+- families by unique-family count.
+
+Its regression fixture covers all four base files, their paginated descendants,
+and supported neighboring files that must remain. The focused suite passed 27
+tests. The complete non-slow Allium suite passed 1,132 tests with one skip and
+55 explicitly deselected slow tests; critical lint, byte compilation, and
+worktree-diff checks also passed.
+
+A full manual generation then reused the actual `~/metrics-output` tree while
+holding the normal deployment lock. It completed all 63 stages without calling
+any publisher, generated 24,756 canonical sitemap URLs, and proved that all
+four obsolete base files and every matching pagination descendant were absent.
+The hosted Allium checkout was clean and exactly aligned with the hotfix SHA.
+
+The counter and marker were reset atomically after that proof at
+`2026-08-02T10:04:15Z`, preserving every historical summary row. Replacement
+read-only one-shot audits target only this final window:
+
+- Smoke, after ten natural scheduler jobs can finish:
+  `2026-08-02T15:10:00Z`.
+- Full 24-hour/48-job acceptance: `2026-08-03T10:10:00Z`.
+
+Each new audit removes only its own uniquely tagged cron entry. The original
+seven-day boundary remains `2026-08-04T02:56:35Z`.
+
+The first normal post-hotfix job ran from `2026-08-02T10:15:01Z` through
+`10:33:40Z`. It confirmed both repositories were already current, pinned
+deploy commit `56e4048cd596e07992e4aa2e69d892ba7a399d29`, completed all 63
+generator stages and discovery validation, and proved the cleanup under the
+ordinary scheduled path. It uploaded and verified immutable version
+`cce8e683-87af-4712-b21d-63db644f6a9d` at its version-specific preview URL in
+368 seconds, promoted that exact version at 100%, completed the DigitalOcean
+hot mirror in 12 minutes 21 seconds, and completed Pages rollback maintenance.
+R2 skipped only its already-current daily live-content and backup operations.
+The complete job exited zero in 1,119 seconds, leaving 681 seconds of cadence
+margin and advancing the new counter to one.
+
+The immediate lock-held audit at `2026-08-02T10:34:30Z` found one internally
+consistent candidate, job, and promotion row with no row errors. Production
+root, search, missing-path behavior, GPTBot access, generated hashes,
+DigitalOcean hashes, direct Pages hashes, daily R2 configuration and marker,
+and the exact active Worker version all passed. Both repository checkouts were
+clean and aligned with their remotes, and all four local/DigitalOcean/R2
+backup markers remained current for August 2. The audit's sole expected
+nonzero condition was the intentionally incomplete one-of-ten smoke count.
 
 ## Fresh validation gates
 
