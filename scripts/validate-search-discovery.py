@@ -25,13 +25,14 @@ def fail(message):
 
 
 def html_attribute(tag, attribute):
-    """Extract a quoted HTML attribute value from one start tag."""
+    """Extract a quoted or unquoted HTML attribute from one start tag."""
     match = re.search(
-        rf"(?:^|\s){re.escape(attribute)}\s*=\s*([\"'])(.*?)\1",
+        rf"(?:^|\s){re.escape(attribute)}\s*=\s*"
+        r"(?:([\"'])(.*?)\1|([^\s\"'=<>`]+))",
         tag,
         re.I | re.S,
     )
-    return match.group(2) if match else None
+    return (match.group(2) or match.group(3)) if match else None
 
 
 def validate_homepage(output_dir, expected_origin):
@@ -45,9 +46,9 @@ def validate_homepage(output_dir, expected_origin):
         if homepage.count(tag) != 1 or head.count(tag) != 1:
             fail(f"{label} verification tag must appear exactly once in <head>")
 
-    robots_meta = re.findall(
-        r"<meta\b[^>]*name=[\"']robots[\"'][^>]*>", head, re.I)
-    for tag in robots_meta:
+    for tag in re.findall(r"<meta\b[^>]*>", head, re.I):
+        if (html_attribute(tag, "name") or "").lower() != "robots":
+            continue
         content = html_attribute(tag, "content") or ""
         directives = {
             directive.strip().lower()
@@ -57,12 +58,11 @@ def validate_homepage(output_dir, expected_origin):
         if directives.intersection({"noindex", "nofollow", "none"}):
             fail("homepage robots metadata blocks indexing or following")
 
-    canonical_matches = re.findall(
-        r"<link\b[^>]*rel=[\"']canonical[\"'][^>]*href=[\"']([^\"']+)",
-        head,
-        re.I,
-    )
-    for canonical in canonical_matches:
+    for tag in re.findall(r"<link\b[^>]*>", head, re.I):
+        rel_tokens = (html_attribute(tag, "rel") or "").lower().split()
+        if "canonical" not in rel_tokens:
+            continue
+        canonical = html_attribute(tag, "href") or ""
         parsed = urlsplit(canonical)
         if parsed.netloc and (
             parsed.scheme != "https" or parsed.netloc != expected_origin.netloc
