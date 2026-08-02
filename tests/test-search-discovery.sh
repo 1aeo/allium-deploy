@@ -110,6 +110,24 @@ if python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
 fi
 
 write_valid_files
+python3 - "$TMP_DIR/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+homepage = Path(sys.argv[1])
+contents = homepage.read_text(encoding="utf-8")
+homepage.write_text(
+    contents.replace("</head>", '<link rel=canonical href=javascript:alert(1)></head>'),
+    encoding="utf-8",
+)
+PY
+if python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
+    "$TMP_DIR" https://metrics.1aeo.com >/dev/null 2>&1; then
+    echo "non-HTTPS canonical scheme was accepted" >&2
+    exit 1
+fi
+
+write_valid_files
 sed 's#metrics\.1aeo\.com#internal.example#' "$TMP_DIR/sitemap.xml" \
     > "$TMP_DIR/sitemap.invalid.xml"
 mv "$TMP_DIR/sitemap.invalid.xml" "$TMP_DIR/sitemap.xml"

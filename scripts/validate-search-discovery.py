@@ -64,7 +64,7 @@ def validate_homepage(output_dir, expected_origin):
             continue
         canonical = html_attribute(tag, "href") or ""
         parsed = urlsplit(canonical)
-        if parsed.netloc and (
+        if (parsed.scheme or parsed.netloc) and (
             parsed.scheme != "https" or parsed.netloc != expected_origin.netloc
         ):
             fail(f"homepage canonical points outside the production origin: {canonical}")
