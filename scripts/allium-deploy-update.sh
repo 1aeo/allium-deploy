@@ -566,8 +566,12 @@ if python3 "$SCRIPT_DIR/validate-search-discovery.py" "$OUTPUT_DIR" "$SITE_URL";
 else
     log "❌ Search verification or crawler discovery validation failed"
     increment_failures
+    ROLLBACK_SUCCESS=true
     rollback_guarded_pulls || ROLLBACK_SUCCESS=false
     [[ -n "${PRUNE_PID:-}" ]] && kill "$PRUNE_PID" 2>/dev/null || true
+    if [[ "$ROLLBACK_SUCCESS" != "true" ]]; then
+        log "❌ One or more guarded-pull rollbacks failed - manual checkout repair required"
+    fi
     exit 1
 fi
 
