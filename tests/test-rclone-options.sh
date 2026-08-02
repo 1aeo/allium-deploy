@@ -93,5 +93,15 @@ grep -Fq 'S3_DISABLE_HTTP2="${DO_RCLONE_DISABLE_HTTP2:-true}"' \
         echo "DigitalOcean must default to independent HTTP/1.1 connections" >&2
         exit 1
     }
+grep -Fq 'TPS_LIMIT="${DO_REMOTE_BACKUP_TPS_LIMIT:-30}"' \
+    "$ROOT_DIR/scripts/allium-deploy-upload-do.sh" || {
+        echo "DigitalOcean remote backup must default to a 30-operation cap" >&2
+        exit 1
+    }
+grep -Fq 'DO_REMOTE_BACKUP_INLINE="${DO_REMOTE_BACKUP_INLINE:-true}"' \
+    "$ROOT_DIR/scripts/allium-deploy-upload-do.sh" || {
+        echo "DigitalOcean remote backup decoupling must remain opt-in" >&2
+        exit 1
+    }
 
 echo "rclone option tests passed"

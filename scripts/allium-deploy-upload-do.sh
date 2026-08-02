@@ -13,8 +13,9 @@ source "$SCRIPT_DIR/allium-deploy-upload-common.sh"
 # Parse arguments
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
+REMOTE_BACKUP_ONLY=false
 case "${1:-}" in
-    --list-backups|--force-backup|--help|-h) ;;
+    --list-backups|--force-backup|--remote-backup-only|--help|-h) ;;
     *) SOURCE_DIR_ARG="${1:-}" ;;
 esac
 
@@ -45,9 +46,48 @@ DO_BUCKET_NAME="${DO_SPACES_BUCKET:?DO_SPACES_BUCKET must be set in config.env}"
 BUCKET="spaces-metrics:${DO_BUCKET_NAME}"
 DO_USE_CDN="${DO_SPACES_CDN:-false}"
 
-LOCAL_BACKUP_MARKER="$LOG_DIR/last-do-local-backup-date"
-DO_BACKUP_MARKER="$LOG_DIR/last-do-backup-date"
+LOCAL_BACKUP_MARKER="${DO_LOCAL_BACKUP_MARKER:-$LOG_DIR/last-do-local-backup-date}"
+DO_BACKUP_MARKER="${DO_REMOTE_BACKUP_MARKER:-$LOG_DIR/last-do-backup-date}"
 DAILY_DO_BACKUP="${DAILY_DO_BACKUP:-true}"
+DO_REMOTE_BACKUP_INLINE="${DO_REMOTE_BACKUP_INLINE:-true}"
+DO_IO_LOCK_FILE="${DO_IO_LOCK_FILE:-/tmp/allium-do-spaces-io.lock}"
+DO_IO_LOCK_WAIT_SECONDS="${DO_IO_LOCK_WAIT_SECONDS:-180}"
+
+validate_do_coordination_settings() {
+    case "$DO_REMOTE_BACKUP_INLINE" in
+        true|false) ;;
+        *)
+            log "❌ DO_REMOTE_BACKUP_INLINE must be true or false (got: $DO_REMOTE_BACKUP_INLINE)"
+            return 2
+            ;;
+    esac
+    [[ "$DO_IO_LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+        log "❌ DO_IO_LOCK_WAIT_SECONDS must be a positive integer (got: $DO_IO_LOCK_WAIT_SECONDS)"
+        return 2
+    }
+    [[ "$DO_IO_LOCK_FILE" == /tmp/* && "$DO_IO_LOCK_FILE" != /tmp/ ]] || {
+        log "❌ DO_IO_LOCK_FILE must be one explicit file below /tmp"
+        return 2
+    }
+    command -v flock >/dev/null 2>&1 || {
+        log "❌ flock is required for DO live/backup serialization"
+        return 2
+    }
+}
+
+run_with_do_io_lock() {
+    local status=0
+    exec 8>"$DO_IO_LOCK_FILE"
+    if ! flock -w "$DO_IO_LOCK_WAIT_SECONDS" 8; then
+        log "❌ Timed out after ${DO_IO_LOCK_WAIT_SECONDS}s waiting for DO I/O lock"
+        exec 8>&-
+        return 1
+    fi
+    "$@" || status=$?
+    flock -u 8
+    exec 8>&-
+    return "$status"
+}
 
 ensure_spaces_remote() {
     local do_key="${DO_SPACES_KEY:-}"
@@ -86,6 +126,9 @@ case "${1:-}" in
         SOURCE_DIR_ARG="${2:-}"
         setup_common_vars
         ;;
+    --remote-backup-only)
+        REMOTE_BACKUP_ONLY=true
+        ;;
     --help|-h)
         print_help "$0" "DO Spaces"
         exit 0
@@ -95,6 +138,26 @@ esac
 [[ ! -d "$SOURCE_DIR" ]] && { echo "❌ Error: Source directory not found: $SOURCE_DIR"; exit 1; }
 
 ensure_spaces_remote
+validate_do_coordination_settings
+
+if [[ "$REMOTE_BACKUP_ONLY" == "true" ]]; then
+    STORAGE_NAME="DO-Backup"
+    TRANSFERS="${DO_REMOTE_BACKUP_TRANSFERS:-16}"
+    CHECKERS="${DO_REMOTE_BACKUP_CHECKERS:-32}"
+    TPS_LIMIT="${DO_REMOTE_BACKUP_TPS_LIMIT:-30}"
+    TPS_LIMIT_BURST="${DO_REMOTE_BACKUP_TPS_LIMIT_BURST:-1}"
+
+    log "📦 DigitalOcean remote backup"
+    log "   Transaction rate: $TPS_LIMIT operations/second, burst $TPS_LIMIT_BURST"
+    if backup_needed "$DO_BACKUP_MARKER" "$DAILY_DO_BACKUP" false; then
+        run_with_do_io_lock create_remote_backup \
+            "$BUCKET" "$DO_BACKUP_MARKER" false "$DAILY_DO_BACKUP"
+    else
+        log "⏭️  Remote backup already completed today: $(cat "$DO_BACKUP_MARKER")"
+    fi
+    print_sync_summary
+    exit 0
+fi
 
 log "🌊 DigitalOcean Spaces Upload"
 log "   Bucket: $DO_BUCKET_NAME ($DO_REGION)"
@@ -108,6 +171,11 @@ else
 fi
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_LOCAL_BACKUP" || true
-create_remote_backup "$BUCKET" "$DO_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_DO_BACKUP" || true
-upload_content "$BUCKET"
+if [[ "$DO_REMOTE_BACKUP_INLINE" == "true" ]]; then
+    run_with_do_io_lock create_remote_backup \
+        "$BUCKET" "$DO_BACKUP_MARKER" "$FORCE_BACKUP" "$DAILY_DO_BACKUP" || true
+else
+    log "⏭️  DO remote backup is handled by the independent retry runner"
+fi
+run_with_do_io_lock upload_content "$BUCKET"
 print_sync_summary
