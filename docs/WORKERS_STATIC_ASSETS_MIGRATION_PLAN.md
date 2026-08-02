@@ -8,10 +8,15 @@ window passed its smoke gate but was later invalidated by expiration of its
 temporary Worker credential. A scoped replacement was verified. Its recovery
 then exposed an upload-time comparison against a branch tip that moved after
 generation started. Commit `d0580c4da88c481f36606753276da31ff335b879`
-pins one current clean deploy SHA for each complete job. The final validation
-window began at `2026-08-02T06:41:22Z`; its first scheduled job passed. Stage 6
-remains gated on the replacement 10-build/24-hour/48-job evidence plus the
-original seven-day boundary.
+pins one current clean deploy SHA for each complete job. A local-midnight run
+then proved that the unchanged daily DigitalOcean remote snapshot could delay
+the every-build hot mirror past the scheduler cadence. Commit
+`739f2d58fcbaab87abf6e1e18a11aea72ca833da` preserves that daily snapshot in
+an hourly retry-safe runner while removing it from the publication critical
+path. The final validation window began at `2026-08-02T08:04:11Z`; its first
+scheduled job and complete live audit passed. Stage 6 remains gated on the
+replacement 10-build/24-hour/48-job evidence plus the original seven-day
+boundary.
 
 **Approved:** 2026-07-26
 
@@ -50,6 +55,9 @@ rollback behavior, and tests are tracked in
 - Keep the architecture serverless. Do not add a Droplet or another always-on server.
 - Make Cloudflare Workers Static Assets the production serving layer.
 - Keep DigitalOcean Spaces synchronized after every successful Allium build as the hot independent mirror.
+- Keep the DigitalOcean local and remote backup policies unchanged. Run the
+  daily remote snapshot through an independent hourly retry-safe runner so it
+  cannot serialize ahead of the every-build hot mirror.
 - Reduce the R2 live content synchronization to once daily only after the Workers production cutover and soak succeed.
 - Preserve the existing R2, DigitalOcean, and local backup retention policies for now. Do not delete backups or shorten retention without separate approval.
 - Do not perform a normal cache purge after a Workers Static Assets version deployment. The cache experiment proved that version activation replaces still-fresh content without a purge.
@@ -78,6 +86,8 @@ Primary files and planned responsibilities:
 | `functions/search.js` and `functions/_shared.js` | Refactor reusable search logic into a Workers entry point while retaining Pages compatibility during migration |
 | New `workers/search.js` | Workers entry point for `/search`; accesses the version-matched `search-index.json` through the assets binding |
 | `scripts/allium-deploy-upload-r2.sh` | Later add a daily live-content sync schedule distinct from the existing daily backup controls |
+| `scripts/allium-deploy-upload-do.sh` | Keep the DO live mirror every build and the local daily backup inline; provide a separately throttled and locked remote-backup-only mode |
+| `scripts/run-do-remote-backup.sh` | Retry the daily DO remote snapshot hourly until its UTC success marker exists, with bounded logs and compact attempt evidence |
 | `scripts/allium-deploy-upload-common.sh` | Shared scheduling/marker and verification helpers |
 | `config.env.example` | Document feature gates, worker names, preview alias, R2 schedule, and promotion policy |
 | Host-only `config.env` | Actual account/project settings; remains uncommitted |
@@ -713,6 +723,8 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] First 24 production hours and at least 48 Stage 4 jobs pass the split
   acceptance gate with current R2 frequency unchanged.
 - [x] R2 live synchronization changes to daily with retry-safe markers.
+- [x] DigitalOcean daily remote backup is decoupled from publication with
+  hourly retry, unchanged retention, and the every-build live mirror intact.
 - [ ] Replacement post-remediation 10-build clean validation gate passes.
 - [ ] Post-remediation 24-hour/48-job clean validation gate passes.
 - [ ] Seven-day production soak passes before Pages or rollback machinery is

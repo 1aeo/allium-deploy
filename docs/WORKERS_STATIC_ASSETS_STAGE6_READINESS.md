@@ -67,14 +67,30 @@ local mutation, a mismatched pin, a stale job-start checkout, and an unpinned
 manual stale checkout still fail closed. The full repository suite and a
 dedicated moving-origin regression passed.
 
-The current marker is `2026-08-02T06:41:22Z`. Its first scheduled job exited
-zero in 1,181 seconds, used a unique immutable preview, completed DigitalOcean
-in 13 minutes 29 seconds, and promoted exact version
-`aa6c89b1-a27f-4781-9f7e-20e1716feb6e` at 100%. The immediate live audit
+The next job at local midnight completed successfully but exposed a separate
+backup critical path. R2 local/remote backups and the DigitalOcean local backup
+completed first; the DigitalOcean remote snapshot then serialized ahead of
+the live mirror. The job exited zero in 2,495 seconds, all four August 2 backup
+markers were current, and the `07:45Z` scheduler slot was skipped while the
+lock remained held. The cadence gate correctly reset the counter. No retention
+or redundancy was reduced.
+
+Commit `739f2d58fcbaab87abf6e1e18a11aea72ca833da` keeps the DigitalOcean live
+mirror every build and the same daily local/remote backups, but moves only the
+remote snapshot to an hourly, UTC-day-idempotent retry runner. Normal live
+publication remains bounded at 120 operations/second; the independent snapshot
+uses 30 operations/second and a shared mutation lock. Same-day execution is a
+quiet no-op, failed snapshots retry hourly, logs remain bounded, and backup
+retention is unchanged.
+
+The current marker is `2026-08-02T08:04:11Z`. Its first scheduled job exited
+zero in 1,108 seconds, used a unique immutable preview, completed the immediate
+DigitalOcean live mirror in 12 minutes 52 seconds, and promoted exact version
+`f7c7244d-811d-4aa0-a45e-0c53d4545849` at 100%. The immediate live audit
 passed every production, mirror, rollback, R2, hash, AI-indexing, and
 active-version check; one of ten was its only expected incomplete condition.
-Replacement one-shot audits are scheduled for `2026-08-02T11:40:00Z` and
-`2026-08-03T06:40:00Z`. All historical evidence remains in the compact
+Replacement one-shot audits are scheduled for `2026-08-02T13:10:00Z` and
+`2026-08-03T08:10:00Z`. All historical evidence remains in the compact
 summaries but is outside the current audit window. The count advances only
 through normal scheduled jobs; it is not accelerated with synthetic uploads.
 
@@ -105,9 +121,16 @@ All Stage 6 changes are in `1aeo/allium-deploy`:
 - `scripts/allium-deploy-cfassets.sh` requires both upload and promotion to
   match that job-start SHA and a clean checkout. Direct unpinned invocations
   retain the live `origin/main` equality requirement.
+- `scripts/allium-deploy-upload-do.sh` retains the every-build live mirror and
+  inline daily local backup while supporting a separately locked
+  `--remote-backup-only` retry mode.
+- `scripts/run-do-remote-backup.sh` provides the hourly idempotent remote-
+  snapshot retry, bounded log maintenance, and compact attempt summary.
 - `config.env.example` documents that the gate stays `true` through the route
   soak and becomes `false` only after the Worker Custom Domain passes the full
-  health gate.
+  health gate. It also documents that `DO_REMOTE_BACKUP_INLINE=false` delegates
+  only the remote snapshot; it does not reduce backup cadence or change the
+  live mirror.
 - `tests/test-stage6-cutover.sh` covers safe input and date gates, exact
   control-plane shape, stale-safe atomic configuration, reviewed mutation
   ordering, and route/CNAME rollback paths.

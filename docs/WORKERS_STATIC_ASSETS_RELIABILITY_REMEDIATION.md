@@ -477,10 +477,84 @@ root, search, custom 404, GPTBot, generated hashes, DigitalOcean hashes,
 direct Pages hashes, daily R2 configuration/marker, and exact active-version
 checks. Its only expected failure was the incomplete one-of-ten count.
 
+### Daily backup critical path and retry-safe decoupling
+
+The next scheduled job began at local midnight, so all four unchanged daily
+backup policies became due at once. The job ran from `2026-08-02T07:15:01Z`
+through `07:56:36Z`, exited zero, and completed every publication, immutable
+preview, promotion, Pages maintenance, and backup operation. It nevertheless
+took 2,495 seconds, failed the fixed 1,800-second cadence gate, reset the clean
+counter to zero, and held the deployment lock across the `07:45Z` scheduler
+slot.
+
+The bounded log establishes the critical path rather than attributing the
+delay to the Worker upload:
+
+- R2 local and remote backups completed at `07:22:19Z` and `07:27:23Z`; R2
+  required 8 minutes 43 seconds in total. Its already-current live-content
+  marker correctly prevented a second August 2 live replication.
+- The DigitalOcean local backup completed at `07:26:05Z`.
+- The DigitalOcean remote snapshot then ran serially through `07:41:51Z`.
+- Only after that remote snapshot did the every-build DigitalOcean live mirror
+  run, completing at `07:54:39Z` after 35 minutes 59 seconds on the storage
+  critical path.
+- All four August 2 backup markers were current at completion. No backup was
+  deleted, no configured retention was shortened, and no redundant storage
+  copy was disabled.
+
+Commit `739f2d58fcbaab87abf6e1e18a11aea72ca833da` preserves the same live
+mirror, daily local backup, daily remote snapshot, integrity checks, and
+retention while removing only the DigitalOcean remote snapshot from the
+twice-hourly publication critical path:
+
+- Normal publication keeps the DigitalOcean local backup inline. With
+  `DO_REMOTE_BACKUP_INLINE=false`, it delegates only the remote snapshot to
+  an independent retry runner and proceeds directly to the live mirror.
+- `scripts/run-do-remote-backup.sh` runs hourly at minute 7. It is UTC-day
+  idempotent: an already-current marker is a quiet no-op, while a failed or
+  absent marker is retried at the next hourly slot.
+- The independent snapshot uses 16 transfers, 32 checkers, a 30-operation/
+  second limit, and burst 1. Normal DigitalOcean live publication retains 56
+  transfers, 80 checkers, a 120-operation/second limit, burst 1, and isolated
+  HTTP/1.1 connections.
+- `/tmp/allium-do-spaces-io.lock` serializes the remote snapshot's object reads
+  with live object mutation. Publication waits at most 180 seconds for that
+  lock, so a stuck snapshot fails boundedly instead of consuming the complete
+  scheduler interval. The two configured operation budgets never exceed the
+  documented 150-operation/second optimization threshold when other safe
+  local work overlaps.
+- The independent runner uses the existing bounded-log helper with an 8 MiB
+  active limit and two retained compressed archives. It writes one compact TSV
+  row for an attempted snapshot and writes no noisy row for a same-day no-op.
+- Tests cover normal-publication delegation, backup-only marker and throttle
+  settings, the same-day no-op, bounded lock timeout, and bounded runner
+  evidence. The complete repository test suite passed before activation.
+
+Production was switched atomically while the scheduler was idle. The same-day
+manual runner check left the August 2 marker unchanged and added no summary
+row. The authoritative clean-window marker was then restarted at
+`2026-08-02T08:04:11Z`, with all historical summaries preserved.
+
+The first normal decoupled job ran from `08:15:01Z` through `08:33:29Z`. It
+pinned commit `739f2d58fcbaab87abf6e1e18a11aea72ca833da`, skipped only already-
+current daily backup/R2 live work, explicitly delegated the DigitalOcean
+remote snapshot, and started the DigitalOcean live mirror immediately. That
+mirror completed in 12 minutes 52 seconds instead of the preceding job's 35
+minutes 59 seconds. The job verified immutable version
+`f7c7244d-811d-4aa0-a45e-0c53d4545849` in three consecutive rounds, promoted
+that exact version at 100%, completed Pages maintenance, and exited zero in
+1,108 seconds with 692 seconds of cadence margin.
+
+The immediate read-only smoke audit at `2026-08-02T08:33:57Z` passed every
+production root, search, custom-404, GPTBot, generated-output hash,
+DigitalOcean hot-mirror hash, direct Pages rollback hash, daily R2 marker, and
+exact active-version check. Its sole expected nonzero condition was the new
+window's intentionally incomplete one-of-ten count.
+
 Two replacement read-only one-shot audits target only this final window:
 
-- Smoke: `2026-08-02T11:40:00Z`.
-- Full 24-hour/48-job acceptance: `2026-08-03T06:40:00Z`.
+- Smoke: `2026-08-02T13:10:00Z`.
+- Full 24-hour/48-job acceptance: `2026-08-03T08:10:00Z`.
 
 Each new audit removes only its own tagged cron entry. The original seven-day
 boundary remains `2026-08-04T02:56:35Z`.
@@ -536,15 +610,17 @@ Pages, mirrors, cadence, backups, or retention.
 ## DigitalOcean runtime follow-up
 
 The clean-window gate intentionally retains the 30-minute whole-job limit.
-DigitalOcean remains the approved every-build hot independent mirror. The
-live transport now combines the 120-transaction/second limiter with
-DigitalOcean-only HTTP/1.1 connection isolation. The first job recovered 729
-seconds of scheduler margin, but the new 10-build and 24-hour window must prove
-that result across complete changing builds. If a later job still crosses the
-limit, preserve the failed evidence and reassess the cap or a redundancy-
-preserving decoupling design before any architectural change. Do not reduce
-redundancy, change retention, disable integrity checks, or decouple the mirror
-without a separately reviewed implementation and rollback plan.
+DigitalOcean remains the approved every-build hot independent mirror. The live
+transport combines the 120-transaction/second limiter with DigitalOcean-only
+HTTP/1.1 connection isolation. The reviewed remote-backup decoupling preserves
+the daily remote snapshot through an hourly retry-safe runner rather than
+serializing it before the live mirror. The first job after activation recovered
+1,387 seconds relative to the daily-backup job and restored 692 seconds of
+scheduler margin, but the new 10-build and 24-hour window must prove that
+result across complete changing builds and an independent snapshot retry. If a
+later job crosses the limit, preserve the failed evidence and reassess the
+bounded transport settings without reducing redundancy, changing retention,
+or disabling integrity checks.
 
 References:
 
