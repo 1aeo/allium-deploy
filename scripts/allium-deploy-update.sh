@@ -49,6 +49,7 @@ DO_ENABLED="${DO_ENABLED:-false}"
 CF_ASSETS_ENABLED="${CF_ASSETS_ENABLED:-false}"
 CF_ASSETS_REQUIRED="${CF_ASSETS_REQUIRED:-false}"
 CF_ASSETS_ALLOW_PROMOTION="${CF_ASSETS_ALLOW_PROMOTION:-false}"
+CF_ASSETS_REQUIRE_FRESH_CHECKOUT="${CF_ASSETS_REQUIRE_FRESH_CHECKOUT:-true}"
 CF_ASSETS_SCRIPT="${CF_ASSETS_SCRIPT:-$SCRIPT_DIR/allium-deploy-cfassets.sh}"
 CF_ASSETS_CONSECUTIVE_FILE="${CF_ASSETS_CONSECUTIVE_FILE:-$DEPLOY_DIR/logs/cfassets-shadow-consecutive-successes}"
 CF_ASSETS_JOB_SUMMARY_FILE="${CF_ASSETS_JOB_SUMMARY_FILE:-$DEPLOY_DIR/logs/cfassets-stage2-job-summary.tsv}"
@@ -287,6 +288,44 @@ guarded_pull_allium_deploy() {
     guarded_pull_repo "allium-deploy" "$DEPLOY_DIR" "1aeo/allium-deploy" "main" "ALLIUM_DEPLOY_ROLLBACK_SHA"
 }
 
+capture_cfassets_deploy_snapshot() {
+    unset CF_ASSETS_EXPECTED_DEPLOY_SHA
+
+    if [[ "$CF_ASSETS_ENABLED" != "true" || "$CF_ASSETS_REQUIRE_FRESH_CHECKOUT" != "true" ]]; then
+        return 0
+    fi
+
+    local head_sha origin_sha dirty
+    if ! run_with_timeout 30 git -C "$DEPLOY_DIR" fetch --quiet origin main; then
+        log "refusing Workers snapshot: could not fetch origin/main"
+        return 1
+    fi
+    if ! head_sha=$(git -C "$DEPLOY_DIR" rev-parse HEAD) ||
+        ! origin_sha=$(git -C "$DEPLOY_DIR" rev-parse origin/main); then
+        log "refusing Workers snapshot: could not resolve checkout or origin/main"
+        return 1
+    fi
+    dirty=$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=normal)
+
+    [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+        log "refusing Workers snapshot: checkout HEAD is malformed"
+        return 1
+    }
+    [[ "$head_sha" == "$origin_sha" ]] || {
+        log "refusing Workers snapshot: checkout HEAD $head_sha does not match origin/main $origin_sha"
+        return 1
+    }
+    [[ -z "$dirty" ]] || {
+        log "refusing Workers snapshot: checkout has tracked or unignored changes"
+        printf '%s\n' "$dirty" >&2
+        return 1
+    }
+
+    CF_ASSETS_EXPECTED_DEPLOY_SHA="$head_sha"
+    export CF_ASSETS_EXPECTED_DEPLOY_SHA
+    log "Pinned Workers deployment snapshot at $CF_ASSETS_EXPECTED_DEPLOY_SHA"
+}
+
 rollback_repo_to_sha() {
     local label="$1"
     local repo_dir="$2"
@@ -509,6 +548,7 @@ export WRANGLER_LOG WRANGLER_LOG_PATH WRANGLER_LOG_SANITIZE
 assert_boolean_setting CF_ASSETS_ENABLED "$CF_ASSETS_ENABLED"
 assert_boolean_setting CF_ASSETS_REQUIRED "$CF_ASSETS_REQUIRED"
 assert_boolean_setting CF_ASSETS_ALLOW_PROMOTION "$CF_ASSETS_ALLOW_PROMOTION"
+assert_boolean_setting CF_ASSETS_REQUIRE_FRESH_CHECKOUT "$CF_ASSETS_REQUIRE_FRESH_CHECKOUT"
 assert_boolean_setting PAGES_ROLLBACK_MAINTENANCE_ENABLED "$PAGES_ROLLBACK_MAINTENANCE_ENABLED"
 
 trap 'record_update_exit $?' EXIT
@@ -532,6 +572,10 @@ fi
 log "Checking guarded auto-pulls..."
 guarded_pull_allium_deploy
 guarded_pull_allium
+if ! capture_cfassets_deploy_snapshot; then
+    increment_failures
+    exit 1
+fi
 
 # Start background prune (only if less than 3 consecutive failures)
 failures=$(get_failures)

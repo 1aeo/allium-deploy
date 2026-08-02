@@ -35,6 +35,7 @@ CF_ASSETS_ENV_OVERRIDES=(
     CF_ASSETS_SUMMARY_FILE
     CF_ASSETS_PROMOTION_SUMMARY_FILE
     CF_ASSETS_REQUIRE_FRESH_CHECKOUT
+    CF_ASSETS_EXPECTED_DEPLOY_SHA
     CF_ASSETS_VERIFY_ATTEMPTS
     CF_ASSETS_VERIFY_MAX_ATTEMPTS
     CF_ASSETS_VERIFY_RETRY_DELAY
@@ -114,16 +115,28 @@ assert_fresh_checkout() {
         return 0
     fi
 
-    local head_sha origin_sha dirty
-    run_with_timeout 30 git -C "$DEPLOY_DIR" fetch --quiet origin main
+    local head_sha origin_sha dirty expected_sha
     head_sha=$(git -C "$DEPLOY_DIR" rev-parse HEAD)
-    origin_sha=$(git -C "$DEPLOY_DIR" rev-parse origin/main)
     dirty=$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=normal)
 
-    [[ "$head_sha" == "$origin_sha" ]] || {
-        log "refusing upload: checkout HEAD $head_sha does not match origin/main $origin_sha"
-        return 1
-    }
+    expected_sha="${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}"
+    if [[ -n "$expected_sha" ]]; then
+        [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            log "refusing upload: pinned job SHA is malformed"
+            return 1
+        }
+        [[ "$head_sha" == "$expected_sha" ]] || {
+            log "refusing upload: checkout HEAD $head_sha does not match pinned job SHA $expected_sha"
+            return 1
+        }
+    else
+        run_with_timeout 30 git -C "$DEPLOY_DIR" fetch --quiet origin main
+        origin_sha=$(git -C "$DEPLOY_DIR" rev-parse origin/main)
+        [[ "$head_sha" == "$origin_sha" ]] || {
+            log "refusing upload: checkout HEAD $head_sha does not match origin/main $origin_sha"
+            return 1
+        }
+    fi
     [[ -z "$dirty" ]] || {
         log "refusing upload: checkout has tracked or unignored changes"
         printf '%s\n' "$dirty" >&2

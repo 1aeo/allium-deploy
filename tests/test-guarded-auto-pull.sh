@@ -374,6 +374,55 @@ test_rollback_both() {
     pass "rollback restores both pulled checkouts"
 }
 
+test_workers_snapshot_pin() {
+    local parts seed clone base updated
+    parts=$(init_repo_pair main workers-snapshot)
+    IFS='|' read -r _ seed clone <<< "$parts"
+    base=$(git -C "$clone" rev-parse HEAD)
+
+    source_update_script
+    # shellcheck disable=SC2034
+    DEPLOY_DIR="$clone"
+    # shellcheck disable=SC2034
+    CF_ASSETS_ENABLED=true
+    # shellcheck disable=SC2034
+    CF_ASSETS_REQUIRE_FRESH_CHECKOUT=true
+    unset CF_ASSETS_EXPECTED_DEPLOY_SHA
+
+    capture_cfassets_deploy_snapshot
+    [[ "${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}" == "$base" ]] || \
+        fail "Workers snapshot did not pin the current checkout"
+
+    push_remote_commit "$seed" main "advanced-during-job"
+    updated=$(git -C "$seed" rev-parse HEAD)
+    if capture_cfassets_deploy_snapshot; then
+        fail "Workers snapshot accepted a checkout already behind origin/main"
+    fi
+    [[ -z "${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}" ]] || \
+        fail "failed Workers snapshot retained a stale pin"
+
+    git -C "$clone" merge --ff-only "$updated" >/dev/null
+    capture_cfassets_deploy_snapshot
+    [[ "${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}" == "$updated" ]] || \
+        fail "Workers snapshot did not pin the updated checkout"
+
+    printf 'dirty\n' >> "$clone/file.txt"
+    if capture_cfassets_deploy_snapshot; then
+        fail "Workers snapshot accepted a dirty checkout"
+    fi
+    [[ -z "${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}" ]] || \
+        fail "dirty Workers snapshot retained a stale pin"
+    git -C "$clone" reset --hard HEAD >/dev/null
+
+    CF_ASSETS_REQUIRE_FRESH_CHECKOUT=false
+    CF_ASSETS_EXPECTED_DEPLOY_SHA="$updated"
+    export CF_ASSETS_EXPECTED_DEPLOY_SHA
+    capture_cfassets_deploy_snapshot
+    [[ -z "${CF_ASSETS_EXPECTED_DEPLOY_SHA:-}" ]] || \
+        fail "disabled freshness checking retained a pin"
+    pass "Workers snapshot is captured once from a current clean checkout"
+}
+
 test_stale_cfpages_refuses_deploy() {
     local parts seed clone output
     parts=$(init_repo_pair main stale-cfpages)
@@ -413,5 +462,6 @@ test_dirty_worktree_skips_pull
 test_fetch_failure_skips_pull
 test_wrong_branch_skips_pull
 test_rollback_both
+test_workers_snapshot_pin
 test_stale_cfpages_refuses_deploy
 test_fresh_cfpages_allows_deploy
