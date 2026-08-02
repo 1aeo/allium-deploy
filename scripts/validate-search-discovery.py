@@ -30,11 +30,31 @@ class SearchMetadataParser(HTMLParser):
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
+        self.head_starts = 0
+        self.head_ends = 0
+        self.in_head = False
+        self.google_tags = 0
+        self.bing_tags = 0
         self.robots_contents = []
         self.canonicals = []
 
     def handle_starttag(self, tag, attrs):
-        attributes = {name: value or "" for name, value in attrs}
+        if tag == "head":
+            self.head_starts += 1
+            self.in_head = True
+            return
+        if not self.in_head:
+            return
+
+        starttag = self.get_starttag_text()
+        if starttag == GOOGLE_TAG:
+            self.google_tags += 1
+        elif starttag == BING_TAG:
+            self.bing_tags += 1
+
+        attributes = {}
+        for name, value in attrs:
+            attributes.setdefault(name.lower(), value or "")
         if tag == "meta" and attributes.get("name", "").lower() == "robots":
             self.robots_contents.append(attributes.get("content", ""))
         elif tag == "link":
@@ -45,21 +65,26 @@ class SearchMetadataParser(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
 
+    def handle_endtag(self, tag):
+        if tag == "head" and self.in_head:
+            self.head_ends += 1
+            self.in_head = False
+
 
 def validate_homepage(output_dir, expected_origin):
     homepage = (output_dir / "index.html").read_text(encoding="utf-8")
-    head_match = re.search(r"<head\b[^>]*>(.*?)</head>", homepage, re.I | re.S)
-    if not head_match:
-        fail("index.html has no complete <head>")
-    head = head_match.group(1)
-
-    for label, tag in (("Google", GOOGLE_TAG), ("Bing", BING_TAG)):
-        if homepage.count(tag) != 1 or head.count(tag) != 1:
-            fail(f"{label} verification tag must appear exactly once in <head>")
-
     metadata = SearchMetadataParser()
-    metadata.feed(head)
+    metadata.feed(homepage)
     metadata.close()
+    if metadata.head_starts != 1 or metadata.head_ends != 1:
+        fail("index.html has no complete <head>")
+
+    for label, tag, head_count in (
+        ("Google", GOOGLE_TAG, metadata.google_tags),
+        ("Bing", BING_TAG, metadata.bing_tags),
+    ):
+        if homepage.count(tag) != 1 or head_count != 1:
+            fail(f"{label} verification tag must appear exactly once in <head>")
 
     for content in metadata.robots_contents:
         directives = {
