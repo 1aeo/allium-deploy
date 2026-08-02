@@ -25,6 +25,43 @@ write_valid_files
 python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
     "$TMP_DIR" https://metrics.1aeo.com >/dev/null
 
+python3 - "$TMP_DIR/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+homepage = Path(sys.argv[1])
+contents = homepage.read_text(encoding="utf-8")
+homepage.write_text(
+    contents.replace(
+        "</head>",
+        '<meta name="robots" data-noindex="documentation" '
+        'content="index, follow"></head>',
+    ),
+    encoding="utf-8",
+)
+PY
+python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
+    "$TMP_DIR" https://metrics.1aeo.com >/dev/null
+
+write_valid_files
+python3 - "$TMP_DIR/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+homepage = Path(sys.argv[1])
+contents = homepage.read_text(encoding="utf-8")
+homepage.write_text(
+    contents.replace("</head>", '<meta name="robots" content="none"></head>'),
+    encoding="utf-8",
+)
+PY
+if python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
+    "$TMP_DIR" https://metrics.1aeo.com >/dev/null 2>&1; then
+    echo "blocking robots none directive was accepted" >&2
+    exit 1
+fi
+
+write_valid_files
 printf '%s%s' "$GOOGLE" "$GOOGLE" > "$TMP_DIR/index.html"
 if python3 "$REPO_DIR/scripts/validate-search-discovery.py" \
     "$TMP_DIR" https://metrics.1aeo.com >/dev/null 2>&1; then

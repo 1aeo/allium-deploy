@@ -24,6 +24,16 @@ def fail(message):
     raise ValueError(message)
 
 
+def html_attribute(tag, attribute):
+    """Extract a quoted HTML attribute value from one start tag."""
+    match = re.search(
+        rf"(?:^|\s){re.escape(attribute)}\s*=\s*([\"'])(.*?)\1",
+        tag,
+        re.I | re.S,
+    )
+    return match.group(2) if match else None
+
+
 def validate_homepage(output_dir, expected_origin):
     homepage = (output_dir / "index.html").read_text(encoding="utf-8")
     head_match = re.search(r"<head\b[^>]*>(.*?)</head>", homepage, re.I | re.S)
@@ -37,9 +47,15 @@ def validate_homepage(output_dir, expected_origin):
 
     robots_meta = re.findall(
         r"<meta\b[^>]*name=[\"']robots[\"'][^>]*>", head, re.I)
-    if any(re.search(r"\b(?:noindex|nofollow)\b", tag, re.I)
-           for tag in robots_meta):
-        fail("homepage robots metadata blocks indexing or following")
+    for tag in robots_meta:
+        content = html_attribute(tag, "content") or ""
+        directives = {
+            directive.strip().lower()
+            for directive in re.split(r"[\s,]+", content)
+            if directive.strip()
+        }
+        if directives.intersection({"noindex", "nofollow", "none"}):
+            fail("homepage robots metadata blocks indexing or following")
 
     canonical_matches = re.findall(
         r"<link\b[^>]*rel=[\"']canonical[\"'][^>]*href=[\"']([^\"']+)",
