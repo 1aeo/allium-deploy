@@ -28,10 +28,13 @@ The resulting window began at `2026-08-01T16:14:14Z`. Its first normal job
 completed in 1,071 seconds, its smoke audit passed, and it reached 15 clean
 scheduled jobs. A separately discovered temporary-credential expiration then
 invalidated that acceptance window. The replacement credential was installed
-and verified without changing its reviewed scope, and the current
-authoritative marker is `2026-08-02T04:38:59Z`. No production route, active
-Worker service, mirror policy, backup, or retention setting changed during
-these restarts.
+and verified without changing its reviewed scope. Three recovery jobs then
+passed, but a fourth exposed a separate mid-job branch-movement race. Commit
+`d0580c4da88c481f36606753276da31ff335b879` now pins one clean, current deploy
+checkout SHA before generation and uses that immutable identity through
+upload and promotion. The current authoritative marker is
+`2026-08-02T06:41:22Z`. No production route, active Worker service, mirror
+policy, backup, or retention setting changed during these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -88,6 +91,28 @@ No candidate writes `cfassets-last-version`, increments the consecutive
 counter, or becomes eligible for promotion until upload metadata and all
 representative checks pass. Exhaustion leaves the previously active production
 version at 100%.
+
+### Immutable deployment-checkout snapshot
+
+The scheduled orchestrator now fetches `origin/main` after its guarded pulls,
+requires the deploy checkout to be current and clean, and captures the exact
+40-character `HEAD` before generation. It exports that SHA only to child work
+for the current job. Worker upload and promotion independently require the
+checkout to remain clean and to match that pinned SHA.
+
+This separates two different safety questions:
+
+- At job start, the selected checkout must match the fetched, reviewed branch
+  tip. A stale, dirty, malformed, or unavailable checkout fails before the
+  expensive generator and publishers run.
+- After generation starts, a later `origin/main` commit belongs to the next
+  scheduled job. It does not invalidate the immutable checkout and output
+  snapshot already being published. Any local checkout mutation still fails
+  closed before Worker upload or promotion.
+
+Direct/manual Worker upload or promotion has no parent-job pin, so it retains
+the stricter live `origin/main` fetch and equality check. The change therefore
+does not allow an operator to deploy an arbitrary stale checkout.
 
 ### Bounded logs
 
@@ -391,9 +416,9 @@ replacement still requires the separately stored Pages credential for Pages
 API paths. Because the replacement credential was supplied through an exposed
 channel, the planned Stage 7 rotation remains required.
 
-The authoritative marker and counter were reset at
+The credential-recovery marker and counter were reset at
 `2026-08-02T04:38:59Z`; historical summaries and failure rows were preserved.
-The first two normal recovery jobs then passed independently:
+The first three normal recovery jobs passed independently. The first two were:
 
 - `04:45:01Z`–`05:03:00Z`: status zero in 1,079 seconds, DigitalOcean in 12
   minutes 13 seconds, and exact verified version
@@ -402,14 +427,60 @@ The first two normal recovery jobs then passed independently:
   minutes 2 seconds, and distinct exact verified version
   `e01a4dfb-7961-4abb-ab26-0fe343a61dc1` promoted at 100%.
 
+The third ran from `05:45:01Z` through `06:02:34Z`, exited zero in 1,053
+seconds, and promoted exact verified version
+`a2ab2833-b4f4-4808-af06-b0ffa6de247d` at 100%.
+
 The immediate audit after the first recovery job passed production root,
 search, missing-path, GPTBot, generated hashes, DigitalOcean hashes, direct
 Pages hashes, the August 2 R2 daily marker, and exact active-version checks.
-Its sole expected incomplete condition was one of ten new jobs. Two new
-read-only one-shot audits now target only the replacement window:
+Its sole expected incomplete condition was one of ten new jobs.
 
-- Smoke: `2026-08-02T09:40:00Z`.
-- Full 24-hour/48-job acceptance: `2026-08-03T05:40:00Z`.
+### Mid-job branch movement and snapshot recovery
+
+The fourth credential-recovery job started normally at
+`2026-08-02T06:15:01Z` on deploy commit
+`e470d07285884ccc4604661bd7354b4021cc39c1`. Commit
+`6f055ac4c21da635acd9a5fbdb0f2e2d31981b65` reached `origin/main` after
+generation began. The old Worker freshness guard fetched the moving branch
+tip at upload time and refused the unchanged checkout. Cloudflare was never
+called, no candidate or promotion was created, and the previous verified
+Worker remained at 100%. DigitalOcean still completed its independent hot
+mirror. The final job row exited one in 998 seconds and reset the counter to
+zero.
+
+That behavior was safe but treated a normal branch update as if the selected
+job checkout had mutated. Commit
+`d0580c4da88c481f36606753276da31ff335b879` implements the immutable
+deployment-checkout snapshot described above. Its regression coverage proves:
+
+- A job-start-pinned checkout remains eligible after the remote branch
+  advances.
+- A mismatched pin or working-tree change fails before Wrangler.
+- An unpinned manual promotion still fetches and requires current
+  `origin/main`.
+- A stale or dirty checkout cannot be pinned at job start, and a failed pin
+  cannot leak a previous expected SHA.
+
+The complete repository suite passed before deployment. The fix was pushed
+and the production checkout was fast-forwarded while the scheduler was idle.
+The authoritative marker and counter were then reset atomically at
+`2026-08-02T06:41:22Z`; historical rows remain intact.
+
+The first normal job from the new marker ran from `06:45:01Z` through
+`07:04:42Z`. It pinned commit `d0580c4da88c481f36606753276da31ff335b879`
+before generation, verified a unique immutable preview in 376 seconds,
+completed DigitalOcean in 13 minutes 29 seconds, promoted exact version
+`aa6c89b1-a27f-4781-9f7e-20e1716feb6e` at 100%, completed Pages maintenance,
+and exited zero in 1,181 seconds. The immediate smoke audit passed production
+root, search, custom 404, GPTBot, generated hashes, DigitalOcean hashes,
+direct Pages hashes, daily R2 configuration/marker, and exact active-version
+checks. Its only expected failure was the incomplete one-of-ten count.
+
+Two replacement read-only one-shot audits target only this final window:
+
+- Smoke: `2026-08-02T11:40:00Z`.
+- Full 24-hour/48-job acceptance: `2026-08-03T06:40:00Z`.
 
 Each new audit removes only its own tagged cron entry. The original seven-day
 boundary remains `2026-08-04T02:56:35Z`.

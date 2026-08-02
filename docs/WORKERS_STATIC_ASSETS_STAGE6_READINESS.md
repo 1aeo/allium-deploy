@@ -53,13 +53,28 @@ reviewed scope was installed in the existing mode-`600` ignored file at
 Stage 6 control-plane reads passed. Its value is not in Git or logs and must
 still be rotated in Stage 7 because it was supplied through an exposed channel.
 
-The current marker is `2026-08-02T04:38:59Z`. Its first two scheduled jobs
-exited zero in 1,079 and 1,164 seconds, used distinct immutable previews, and
-promoted their exact versions at 100%. The immediate live audit passed every
-production, mirror, rollback, R2, hash, AI-indexing, and active-version check;
-one of ten was its only expected incomplete condition. Replacement one-shot
-audits are scheduled for `2026-08-02T09:40:00Z` and
-`2026-08-03T05:40:00Z`. All historical evidence remains in the compact
+The credential-recovery marker at `2026-08-02T04:38:59Z` produced three clean
+jobs. A fourth job then selected a current clean checkout, but `origin/main`
+advanced after generation began. The old upload-time freshness check compared
+the unchanged checkout to that new branch tip and failed closed before calling
+Cloudflare. This protected production but showed that branch identity was not
+being treated as an immutable per-job input.
+
+Commit `d0580c4da88c481f36606753276da31ff335b879` now captures the current clean
+deploy SHA before generation and requires upload and promotion to match that
+exact SHA. Remote branch movement is deferred to the next scheduled job;
+local mutation, a mismatched pin, a stale job-start checkout, and an unpinned
+manual stale checkout still fail closed. The full repository suite and a
+dedicated moving-origin regression passed.
+
+The current marker is `2026-08-02T06:41:22Z`. Its first scheduled job exited
+zero in 1,181 seconds, used a unique immutable preview, completed DigitalOcean
+in 13 minutes 29 seconds, and promoted exact version
+`aa6c89b1-a27f-4781-9f7e-20e1716feb6e` at 100%. The immediate live audit
+passed every production, mirror, rollback, R2, hash, AI-indexing, and
+active-version check; one of ten was its only expected incomplete condition.
+Replacement one-shot audits are scheduled for `2026-08-02T11:40:00Z` and
+`2026-08-03T06:40:00Z`. All historical evidence remains in the compact
 summaries but is outside the current audit window. The count advances only
 through normal scheduled jobs; it is not accelerated with synthetic uploads.
 
@@ -84,7 +99,12 @@ All Stage 6 changes are in `1aeo/allium-deploy`:
   inputs.
 - `scripts/allium-deploy-update.sh` has one
   `PAGES_ROLLBACK_MAINTENANCE_ENABLED` gate for both schema-triggered Pages
-  deployments and the Pages purge loop.
+  deployments and the Pages purge loop. It also captures the immutable deploy
+  checkout SHA before generation so normal mid-job branch movement cannot
+  invalidate an otherwise unchanged build.
+- `scripts/allium-deploy-cfassets.sh` requires both upload and promotion to
+  match that job-start SHA and a clean checkout. Direct unpinned invocations
+  retain the live `origin/main` equality requirement.
 - `config.env.example` documents that the gate stays `true` through the route
   soak and becomes `false` only after the Worker Custom Domain passes the full
   health gate.

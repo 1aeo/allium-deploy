@@ -5,10 +5,13 @@ production soak continues from `2026-07-28T02:56:35Z`. After a guarded
 checkout refusal and a separately discovered direct-Pages cache-key mismatch,
 the deployed correction passed a live purge trial. The final post-transport-fix
 window passed its smoke gate but was later invalidated by expiration of its
-temporary Worker credential. A scoped replacement was verified and the current
-window began at `2026-08-02T04:38:59Z`; its first two scheduled jobs passed.
-Stage 6 remains gated on the replacement 10-build/24-hour/48-job evidence plus
-the original seven-day boundary.
+temporary Worker credential. A scoped replacement was verified. Its recovery
+then exposed an upload-time comparison against a branch tip that moved after
+generation started. Commit `d0580c4da88c481f36606753276da31ff335b879`
+pins one current clean deploy SHA for each complete job. The final validation
+window began at `2026-08-02T06:41:22Z`; its first scheduled job passed. Stage 6
+remains gated on the replacement 10-build/24-hour/48-job evidence plus the
+original seven-day boundary.
 
 **Approved:** 2026-07-26
 
