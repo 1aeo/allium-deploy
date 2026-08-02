@@ -110,6 +110,16 @@ immediate audit passed every live, mirror, rollback, R2, backup-marker,
 AI-indexing, checkout, and active-version check; one of ten was its only
 expected incomplete condition.
 
+The current window reached ten consecutive natural jobs at
+`2026-08-02T15:05:44Z`. Every job exited zero inside 1,800 seconds, all ten
+immutable previews were unique, and every promotion exactly matched its
+candidate. One job recovered from simultaneous transient Worker-preview and
+DigitalOcean network failures in 1,788 seconds without missing the following
+scheduler slot; the next job was normal. The scheduled smoke audit at
+`15:10:01Z` passed every row and live check and removed only its own cron
+entry. Stage 6 therefore has a completed smoke gate but still requires the
+full 24-hour/48-job audit and the original seven-day boundary.
+
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom
 Domains, DNS, and Worker routes. The separate mode-`600` Pages deployment

@@ -21,8 +21,10 @@ cleanup; its tests and a complete real-output reproduction passed. The final
 validation window began at `2026-08-02T10:04:15Z`. Its first natural job and
 complete live audit passed in 1,119 seconds with exact candidate-to-promotion
 identity and all mirrors, rollback paths, daily markers, and AI indexing
-healthy. Stage 6 remains gated on the replacement 10-build/24-hour/48-job
-evidence plus the original seven-day boundary.
+healthy. The final window then completed its ten-build smoke gate: all ten jobs
+passed cadence, all candidate URLs were unique, every promotion matched, and
+the unattended live audit passed. Stage 6 remains gated on the replacement
+24-hour/48-job evidence plus the original seven-day boundary.
 
 **Approved:** 2026-07-26
 
@@ -736,7 +738,7 @@ Only after Allium is stable and its first complete billing cycle is understood:
 - [x] R2 live synchronization changes to daily with retry-safe markers.
 - [x] DigitalOcean daily remote backup is decoupled from publication with
   hourly retry, unchanged retention, and the every-build live mirror intact.
-- [ ] Replacement post-remediation 10-build clean validation gate passes.
+- [x] Replacement post-remediation 10-build clean validation gate passes.
 - [ ] Post-remediation 24-hour/48-job clean validation gate passes.
 - [ ] Seven-day production soak passes before Pages or rollback machinery is
   retired.

@@ -627,6 +627,37 @@ clean and aligned with their remotes, and all four local/DigitalOcean/R2
 backup markers remained current for August 2. The audit's sole expected
 nonzero condition was the intentionally incomplete one-of-ten smoke count.
 
+### Final-window smoke gate
+
+Ten consecutive natural scheduler jobs completed from
+`2026-08-02T10:15:01Z` through `15:05:44Z`. Every row exited zero and passed
+the 1,800-second cadence bound. The ten Worker candidates used ten distinct
+version-specific preview URLs, and every promotion selected exactly its
+verified version. Worker verification ranged from 328 to 493 seconds; complete
+job runtime ranged from 1,119 to 1,788 seconds. Asset-count and prepared-byte
+movement remained inside the bounded discontinuity checks.
+
+The ninth job supplied useful transient-failure coverage without being
+synthetic. At `14:23Z`, two version-preview root requests timed out while the
+DigitalOcean mirror simultaneously received several S3 `400` and network
+timeout responses. Worker verification recovered through the existing bounded
+loop and then produced three consecutive complete passes. Rclone refused
+deletions after the interrupted first pass, retried the complete integrity
+walk, and succeeded before promotion. The job completed in 1,788 seconds with
+12 seconds of cadence margin, released the lock before `14:45Z`, and did not
+cause a missed scheduler slot. The following job completed normally without
+either failure signature. This is consistent with a transient host/network
+event; the 24-hour gate remains responsible for testing that conclusion over
+the longer window.
+
+The unattended smoke audit ran at `2026-08-02T15:10:01Z` and passed with zero
+failures. It independently confirmed all ten job/candidate rows, production
+root, search and missing-path behavior, GPTBot access, generated hashes,
+DigitalOcean hot-mirror hashes, direct Pages rollback hashes, daily R2 mode
+and marker, and the latest verified Worker version serving 100% of production.
+It removed only its own uniquely tagged cron entry. The full
+`2026-08-03T10:10:00Z` 24-hour/48-job audit remains installed.
+
 ## Fresh validation gates
 
 Activation and each explicitly recorded restart described above reset only
@@ -653,6 +684,8 @@ The read-only command is:
 ```bash
 scripts/run-cfassets-remediation-audit.sh --smoke
 ```
+
+This gate passed for the current window at `2026-08-02T15:10:01Z`.
 
 ### Full 24-hour gate
 
