@@ -29,27 +29,39 @@ resource-constrained. Commit
 every-build integrity behavior while using small HTTP/1.1 connections only for
 DigitalOcean.
 
-The authoritative clean-window marker restarted at
-`2026-08-01T16:14:14Z`. Ten consecutive normal scheduled jobs then exited
-zero, completed inside 1,800 seconds, used ten unique immutable preview URLs,
-and promoted exactly their verified versions at 100%. Total job duration
-ranged from 1,071 to 1,178 seconds. The tenth row exercised a full 4.150 GiB,
-29,254-changed-file DigitalOcean mirror and still finished in 1,164 seconds.
-Every job preserved the approved DigitalOcean every-build mirror, daily R2
-live replication, Pages rollback path, backups, retention, and AI crawler
-policy.
+The post-transport-fix window began at `2026-08-01T16:14:14Z`. Fifteen
+consecutive normal scheduled jobs exited zero, completed inside 1,800 seconds,
+used unique immutable preview URLs, and promoted exactly their verified
+versions at 100%. Every job preserved the approved DigitalOcean every-build
+mirror, daily R2 live replication, Pages rollback path, backups, retention, and
+AI crawler policy.
 
 The read-only audit at `2026-08-01T21:05:05Z` passed the 10-of-10 smoke gate
 with zero errors. Production, mirror, direct rollback, hash, R2 marker,
 AI-indexing, and exact active-version checks all passed. The independent
 unattended audit at `2026-08-01T21:35:01Z` then passed with 11 clean jobs and
 11 unique immutable previews, repeated the complete live check set with zero
-errors, and removed only its own one-shot cron entry. The full audit remains
-scheduled for
-`2026-08-02T16:35:00Z`; it must independently prove at least 24 hours and 48
-clean scheduled jobs. All earlier evidence remains in the compact summaries
-but is outside the current audit window. The count advances only through
-normal scheduled jobs; it is not accelerated with synthetic uploads.
+errors, and removed only its own one-shot cron entry.
+
+That window was later invalidated by expiration of the temporary
+Worker/DNS/routes credential at `2026-08-01T23:59:59Z`. One already-verified
+candidate failed closed at promotion and nine later uploads rejected the
+expired credential. Production remained on the last verified Worker version;
+no failed candidate received traffic. A replacement credential with the same
+reviewed scope was installed in the existing mode-`600` ignored file at
+`2026-08-02T04:37:59Z`. Its token, account, DNS, route, Worker-domain, and
+Stage 6 control-plane reads passed. Its value is not in Git or logs and must
+still be rotated in Stage 7 because it was supplied through an exposed channel.
+
+The current marker is `2026-08-02T04:38:59Z`. Its first two scheduled jobs
+exited zero in 1,079 and 1,164 seconds, used distinct immutable previews, and
+promoted their exact versions at 100%. The immediate live audit passed every
+production, mirror, rollback, R2, hash, AI-indexing, and active-version check;
+one of ten was its only expected incomplete condition. Replacement one-shot
+audits are scheduled for `2026-08-02T09:40:00Z` and
+`2026-08-03T05:40:00Z`. All historical evidence remains in the compact
+summaries but is outside the current audit window. The count advances only
+through normal scheduled jobs; it is not accelerated with synthetic uploads.
 
 Stage 6 now uses two existing credentials instead of broadening one token. The
 mode-`600` Worker/DNS credential handles account discovery, Worker Custom

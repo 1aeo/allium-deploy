@@ -24,11 +24,14 @@ request-rate remediation described below. Its first scheduled trial completed
 successfully, but left too little cadence margin. Commit
 `92630c461a847ff98645da4155c7aaba5eb4b1c2` then isolated DigitalOcean
 transfers onto small HTTP/1.1 connections while preserving the request cap.
-The current authoritative marker is `2026-08-01T16:14:14Z`. Its first normal
-scheduled job completed in 1,071 seconds and the tenth completed at
-`2026-08-01T21:04:25Z`. The immediate smoke audit passed 10 of 10 with zero
-errors. No production route, active Worker service, mirror policy, backup, or
-retention setting changed during these restarts.
+The resulting window began at `2026-08-01T16:14:14Z`. Its first normal job
+completed in 1,071 seconds, its smoke audit passed, and it reached 15 clean
+scheduled jobs. A separately discovered temporary-credential expiration then
+invalidated that acceptance window. The replacement credential was installed
+and verified without changing its reviewed scope, and the current
+authoritative marker is `2026-08-02T04:38:59Z`. No production route, active
+Worker service, mirror policy, backup, or retention setting changed during
+these restarts.
 
 Stage 6 remains blocked until both of these independent conditions pass:
 
@@ -359,12 +362,57 @@ crontab from the current marker:
   with 11 clean jobs, 11 unique immutable previews, and zero errors, then
   removed only its own tagged crontab entry. All production, mirror, rollback,
   R2, AI-indexing, hash, and active-version checks passed.
-- Full audit: `2026-08-02T16:35:00Z`, after more than 24 hours and at least 48
-  scheduled jobs should exist; this one-shot remains installed.
+- Full audit: the original `2026-08-02T16:35:00Z` one-shot was removed after
+  the later credential-expiry failure invalidated this window.
 
 Each audit removes only its own tagged crontab entry after running. Neither
 audit can advance Stage 6 or mutate Cloudflare, mirrors, backups, cadence, or
 retention.
+
+### Credential-expiry invalidation and recovery
+
+The temporary Worker/DNS/routes credential expired at
+`2026-08-01T23:59:59Z`. The first affected job began at `23:45:01Z`, completed
+its immutable candidate verification before expiration, and then failed closed
+when production promotion crossed the expiration boundary. Nine subsequent
+scheduled jobs rejected the expired credential at the Worker upload boundary.
+All ten rows exited nonzero and kept the counter at zero. No unverified version
+received production traffic. The last verified Worker remained available while
+DigitalOcean and Pages continued receiving their required every-build updates;
+the read-only audit correctly reported that production no longer matched the
+latest generated output.
+
+A replacement least-privilege credential was installed atomically outside a
+deployment at `2026-08-02T04:37:59Z`. It is stored only in the existing
+mode-`600` ignored credential file. Token verification, account discovery,
+zone DNS, Worker routes, Worker Custom Domains, and the complete Stage 6
+control-plane read set passed without printing or committing the secret. The
+replacement still requires the separately stored Pages credential for Pages
+API paths. Because the replacement credential was supplied through an exposed
+channel, the planned Stage 7 rotation remains required.
+
+The authoritative marker and counter were reset at
+`2026-08-02T04:38:59Z`; historical summaries and failure rows were preserved.
+The first two normal recovery jobs then passed independently:
+
+- `04:45:01Z`–`05:03:00Z`: status zero in 1,079 seconds, DigitalOcean in 12
+  minutes 13 seconds, and exact verified version
+  `f50fa97d-c7f5-4f06-b6e8-ea4d8916e30f` promoted at 100%.
+- `05:15:01Z`–`05:34:25Z`: status zero in 1,164 seconds, DigitalOcean in 13
+  minutes 2 seconds, and distinct exact verified version
+  `e01a4dfb-7961-4abb-ab26-0fe343a61dc1` promoted at 100%.
+
+The immediate audit after the first recovery job passed production root,
+search, missing-path, GPTBot, generated hashes, DigitalOcean hashes, direct
+Pages hashes, the August 2 R2 daily marker, and exact active-version checks.
+Its sole expected incomplete condition was one of ten new jobs. Two new
+read-only one-shot audits now target only the replacement window:
+
+- Smoke: `2026-08-02T09:40:00Z`.
+- Full 24-hour/48-job acceptance: `2026-08-03T05:40:00Z`.
+
+Each new audit removes only its own tagged cron entry. The original seven-day
+boundary remains `2026-08-04T02:56:35Z`.
 
 ## Fresh validation gates
 
