@@ -1,0 +1,21 @@
+{
+  "name": "allium-deploy",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.21.0",
+      "onFail": "download"
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js && for test_script in tests/test-*.sh; do bash \"$test_script\" || exit; done",
+    "audit:cfassets-soak": "node scripts/audit-cfassets-soak.js",
+    "audit:cfassets-stage4": "node scripts/audit-cfassets-stage4.js"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}

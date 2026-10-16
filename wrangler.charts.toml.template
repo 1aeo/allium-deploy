@@ -1,0 +1,19 @@
+# Allium charts-only Workers Static Assets configuration (CHARTS_LAYOUT=charts).
+# Generated as wrangler.charts.toml by scripts/allium-deploy-cfcharts.sh.
+# It has no Worker code. Production requests reach it through the zone route
+# <host>/charts/*, which is managed outside this file: generated configs with
+# a route or custom domain are refused. workers.dev and Version URLs serve
+# verification only, as for the main Worker.
+
+name = "{{CF_ASSETS_WORKER_NAME}}"
+compatibility_date = "{{CF_ASSETS_COMPATIBILITY_DATE}}"
+preview_urls = true
+workers_dev = true
+
+[assets]
+directory = "{{CF_ASSETS_DIRECTORY}}"
+# Assets are looked up by the full request path, so the directory holds
+# charts/relay/..., charts/contact/... and charts/404.html, the page a missing
+# chart gets.
+not_found_handling = "404-page"
+html_handling = "none"

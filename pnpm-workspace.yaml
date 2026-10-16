@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+patchedDependencies:
+  wrangler@4.149.0: patches/wrangler@4.149.0.patch

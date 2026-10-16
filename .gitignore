@@ -1,0 +1,46 @@
+# Secrets - NEVER commit these
+config.env
+*.secret
+*.key
+
+# Generated from template by deploy script
+wrangler.toml
+wrangler.assets.toml
+wrangler.charts.toml
+# Their temporary renderings: the main and charts uploads run together, and
+# each checks that the checkout is clean while the other may be rendering
+wrangler.*.toml.tmp*
+allium.cron
+
+# Keep public/ dir but ignore contents (except .gitkeep)
+public/*
+!public/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Runtime files
+/tmp/
+*.pid
+node_modules/
+# State of scripts/allium-deploy-sync-toolchain.sh: the previous node_modules
+# during an install and the last failed install
+.toolchain/
+
+# Backups (stored elsewhere)
+backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Cloudflare Wrangler build/deploy cache (regenerated on every 'wrangler pages deploy')
+.wrangler/

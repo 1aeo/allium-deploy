@@ -1,0 +1,11 @@
+# Installed as the main Worker's _redirects by allium-deploy while
+# CHARTS_LAYOUT=charts, and removed otherwise: it must be absent in the beside
+# layout, whose charts are at the old URLs. Chart PNGs moved under /charts/,
+# which the charts Worker serves on its own route. These redirects are
+# permanent while CHARTS_LAYOUT=charts: old chart URLs are crawled and
+# hotlinked. They stay 302, not 301, while going back to beside is possible:
+# browsers keep a 301 with no expiry. A placeholder matches one path segment,
+# so these rules match only /relay/<fingerprint>/<name>.png and
+# /contact/<hash>/<name>.png, never a page.
+/relay/:fp/:name.png /charts/relay/:fp/:name.png 302
+/contact/:hash/:name.png /charts/contact/:hash/:name.png 302

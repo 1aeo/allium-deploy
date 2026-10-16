@@ -1,0 +1,4 @@
+# Installed as the main Worker's .assetsignore by allium-deploy while
+# CHARTS_LAYOUT=charts, and removed otherwise. Do not edit the installed copy:
+# every build rewrites it. The charts Worker serves /charts/ on its own route.
+/charts/
