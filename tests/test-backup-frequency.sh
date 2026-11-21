@@ -46,7 +46,8 @@ printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'printf "%s\n" "$*" >> "$MOCK_RCLONE_CALLS"' \
-    'if [[ -n "${MOCK_BACKUP_SLEEP:-}" && "${1:-}" == sync && "${3:-}" == */backups/backup-* ]]; then sleep "$MOCK_BACKUP_SLEEP"; fi' \
+    'if [[ -n "${MOCK_BACKUP_READY_FILE:-}" && "${1:-}" == sync && "${3:-}" == */backups/backup-* ]]; then : > "$MOCK_BACKUP_READY_FILE"; fi' \
+    'if [[ -n "${MOCK_BACKUP_RELEASE_FILE:-}" && "${1:-}" == sync && "${3:-}" == */backups/backup-* ]]; then _w=0; while [[ ! -e "$MOCK_BACKUP_RELEASE_FILE" ]] && (( _w < 100 )); do sleep 0.1; _w=$((_w + 1)); done; fi' \
     'if [[ -n "${MOCK_FAIL_BACKUPS:-}" && "${1:-}" == sync && ( "${3:-}" == */backups/backup-* || "${3:-}" == *:test-bucket/_backups/* ) ]]; then echo "mock backup failure" >&2; exit 7; fi' \
     'if [[ -n "${MOCK_RCLONE_STDERR:-}" && "${1:-}" == sync ]]; then echo "$MOCK_RCLONE_STDERR" >&2; fi' \
     'case "${1:-}" in' \
@@ -464,16 +465,49 @@ run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= MOCK_FAIL_BACKUPS=1 LOCAL
 
 # Verify wait timeout while R2 holds the backup lock (and then fails) aborts DO before overwriting live content
 rm -f "$R2_LOCAL_MARKER" "$R2_MARKER" "$DO_LOCAL_MARKER" "$DO_MARKER" "$result_signal"
+timeout_ready="$TMP_DIR/r2-timeout.ready"
+timeout_release="$TMP_DIR/r2-timeout.release"
+rm -f "$timeout_ready" "$timeout_release"
 : > "$MOCK_CALLS"
-env "${common_env[@]}" MOCK_BACKUP_SLEEP=2 MOCK_FAIL_BACKUPS=1 ALLIUM_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off \
+r2_c_pid="" do_c_pid=""
+stop_timeout_procs() {
+    : > "$timeout_release" 2>/dev/null || true
+    if [[ -n "$r2_c_pid" ]]; then
+        kill "$r2_c_pid" 2>/dev/null || true
+        wait "$r2_c_pid" 2>/dev/null || true
+        r2_c_pid=""
+    fi
+    if [[ -n "$do_c_pid" ]]; then
+        kill "$do_c_pid" 2>/dev/null || true
+        wait "$do_c_pid" 2>/dev/null || true
+        do_c_pid=""
+    fi
+}
+trap 'stop_timeout_procs; rm -rf "$TMP_DIR"' EXIT
+env "${common_env[@]}" MOCK_BACKUP_READY_FILE="$timeout_ready" MOCK_BACKUP_RELEASE_FILE="$timeout_release" MOCK_FAIL_BACKUPS=1 ALLIUM_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off \
     "$DEPLOY_COPY/scripts/allium-deploy-upload-r2.sh" "$OUT" > "$TMP_DIR/r2-timeout-coord.log" 2>&1 &
 r2_c_pid=$!
+waited=0
+while [[ ! -e "$timeout_ready" ]] && (( waited < 50 )); do
+    sleep 0.1
+    waited=$((waited + 1))
+done
+[[ -e "$timeout_ready" ]] || {
+    stop_timeout_procs
+    fail "R2 mock backup did not reach readiness barrier in time"
+}
 env "${common_env[@]}" DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$result_signal" ALLIUM_LOCAL_BACKUP_WAIT_TIMEOUT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off \
     "$DEPLOY_COPY/scripts/allium-deploy-upload-do.sh" "$OUT" > "$TMP_DIR/do-timeout-coord.log" 2>&1 &
 do_c_pid=$!
-rc_r2=0 rc_do=0
-wait "$r2_c_pid" || rc_r2=$?
+rc_do=0
 wait "$do_c_pid" || rc_do=$?
+do_c_pid=""
+: > "$timeout_release"
+rc_r2=0
+wait "$r2_c_pid" || rc_r2=$?
+r2_c_pid=""
+trap 'rm -rf "$TMP_DIR"' EXIT
+[[ "$rc_r2" == 0 ]] || fail "R2 timeout-case upload exited $rc_r2 unexpectedly"
 [[ "$rc_do" != 0 ]] || fail "DO did not fail after primary wait timeout"
 [[ "$(count_calls "sync $OUT spaces-metrics:test-bucket ")" == 0 ]] || \
     fail "DO overwrote live bucket despite primary wait timeout"
@@ -487,6 +521,13 @@ run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACK
 [[ "$RUN_STATUS" != 0 ]] || fail "coordinated DO fallback exited 0 despite lock contention"
 [[ "$(count_calls "sync $OUT spaces-metrics:test-bucket ")" == 0 ]] || \
     fail "coordinated DO fallback overwrote live bucket despite lock contention"
+
+# Verify --skip-local-backup combined with --force-backup still aborts DO live sync on lock contention
+clear_markers
+run allium-deploy-upload-do.sh MOCK_FLOCK_NONBLOCK_EXIT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off -- --skip-local-backup --force-backup "$OUT"
+[[ "$RUN_STATUS" != 0 ]] || fail "--skip-local-backup --force-backup exited 0 despite lock contention"
+[[ "$(count_calls "sync $OUT spaces-metrics:test-bucket ")" == 0 ]] || \
+    fail "--skip-local-backup --force-backup overwrote live bucket despite lock contention"
 
 pass "DO coordinates pre-upload local backup with R2 and preserves pre-upload snapshot on R2 failure or timeout"
 
