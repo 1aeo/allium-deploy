@@ -419,3 +419,46 @@ expect_log 'stderr-after-lock-visible' "releasing flock silenced shell stderr"
 [[ ! -e "$DO_LOCAL_MARKER" ]] || fail "flock contention wrote local backup marker"
 pass "non-blocking flock contention skips duplicate local backup and preserves shell stderr"
 
+# Parallel coordination: DO waits for R2's result signal before live upload,
+# skipping duplicate local backup on R2 success and backing up pre-upload
+# snapshot on R2 failure before live sync overwrites DO_BUCKET.
+rm -f "$R2_LOCAL_MARKER" "$R2_MARKER" "$DO_LOCAL_MARKER" "$DO_MARKER"
+: > "$MOCK_CALLS"
+result_signal="$TMP_DIR/r2-backup.result"
+rm -f "$result_signal"
+env "${common_env[@]}" ALLIUM_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-r2.sh" "$OUT" > "$TMP_DIR/r2-coord.log" 2>&1 &
+r2_c_pid=$!
+env "${common_env[@]}" DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-do.sh" "$OUT" > "$TMP_DIR/do-coord.log" 2>&1 &
+do_c_pid=$!
+rc_r2=0 rc_do=0
+wait "$r2_c_pid" || rc_r2=$?
+wait "$do_c_pid" || rc_do=$?
+[[ "$rc_r2" == 0 && "$rc_do" == 0 ]] || fail "parallel R2+DO coord exited r2=$rc_r2 do=$rc_do"
+[[ "$(count_calls 'backups/backup-')" == 1 ]] || fail "expected 1 local backup on healthy R2+DO coord"
+
+# Now simulate R2 failing local backup: DO must run create_local_backup BEFORE upload_do_content
+rm -f "$R2_LOCAL_MARKER" "$R2_MARKER" "$DO_LOCAL_MARKER" "$DO_MARKER" "$result_signal"
+: > "$MOCK_CALLS"
+env "${common_env[@]}" MOCK_FAIL_BACKUPS=1 ALLIUM_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-r2.sh" "$OUT" > "$TMP_DIR/r2-fail-coord.log" 2>&1 &
+r2_c_pid=$!
+env "${common_env[@]}" DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-do.sh" "$OUT" > "$TMP_DIR/do-fail-coord.log" 2>&1 &
+do_c_pid=$!
+rc_r2=0 rc_do=0
+wait "$r2_c_pid" || rc_r2=$?
+wait "$do_c_pid" || rc_do=$?
+[[ "$rc_r2" == 0 && "$rc_do" == 0 ]] || fail "R2 failure DO fallback exited r2=$rc_r2 do=$rc_do"
+do_backup_line=$(grep -nE 'sync spaces-metrics:test-bucket .*/backups/backup-' "$MOCK_CALLS" | head -n 1 | cut -d: -f1)
+do_live_line=$(grep -nE "sync $OUT spaces-metrics:test-bucket " "$MOCK_CALLS" | head -n 1 | cut -d: -f1)
+[[ -n "$do_backup_line" && -n "$do_live_line" && "$do_backup_line" -lt "$do_live_line" ]] || \
+    fail "DO fallback backup ($do_backup_line) did not run BEFORE live sync ($do_live_line)"
+
+# Verify --local-backup-only exits non-zero when local backup fails
+rm -f "$R2_LOCAL_MARKER" "$DO_LOCAL_MARKER"
+run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= MOCK_FAIL_BACKUPS=1 LOCAL_BACKUP_FREQUENCY=daily -- --local-backup-only "$OUT"
+[[ "$RUN_STATUS" != 0 ]] || fail "--local-backup-only exited 0 despite backup failure"
+pass "DO coordinates pre-upload local backup with R2 and preserves pre-upload snapshot on R2 failure"
+

@@ -680,6 +680,10 @@ start_publisher() {
         trap - EXIT
         status=0
         "$@" || status=$?
+        if [[ "$name" == r2 && -n "${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" && ! -s "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" ]]; then
+            local tmp_res="${ALLIUM_LOCAL_BACKUP_RESULT_FILE}.tmp.${BASHPID:-$$}"
+            printf 'failed\n' > "$tmp_res" 2>/dev/null && mv -f -- "$tmp_res" "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" 2>/dev/null || rm -f -- "$tmp_res" 2>/dev/null || true
+        fi
         if [[ -n "$PUBLISH_STATE_DIR" ]]; then
             date +%s > "$PUBLISH_STATE_DIR/$name.finished" 2>/dev/null || true
         fi
@@ -832,7 +836,7 @@ record_withheld_promotion() {
 # Workers failure, if any.
 publish_in_restore_order() {
     local charts_pid="" cf_pid="" do_pid="" r2_pid=""
-    local r2_local_backup_result_file="" r2_local_backup_result=""
+    local r2_local_backup_result_file=""
 
     PUBLISH_STATE_DIR=$(mktemp -d 2>/dev/null) || PUBLISH_STATE_DIR=""
     if [[ "$DO_ENABLED" == "true" && "$R2_ENABLED" == "true" && -n "$PUBLISH_STATE_DIR" ]]; then
@@ -867,8 +871,8 @@ publish_in_restore_order() {
 
     if [[ "$DO_ENABLED" == "true" ]]; then
         log "🚀 Starting DO Spaces upload..."
-        if [[ "$R2_ENABLED" == "true" ]]; then
-            start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" --skip-local-backup "$OUTPUT_DIR"
+        if [[ -n "$r2_local_backup_result_file" ]]; then
+            start_publisher do-spaces env ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
         else
             start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
         fi
@@ -878,7 +882,7 @@ publish_in_restore_order() {
     if [[ "$R2_ENABLED" == "true" ]]; then
         log "🚀 Starting R2 upload..."
         if [[ -n "$r2_local_backup_result_file" ]]; then
-            start_publisher r2 env ALLIUM_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
+            ALLIUM_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" start_publisher r2 env ALLIUM_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
         else
             start_publisher r2 stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
         fi
@@ -955,17 +959,6 @@ publish_in_restore_order() {
             UPLOAD_SUCCESS=true
         else
             log "⚠️ R2 upload failed (exit $R2_EXIT, $R2_TIME)"
-        fi
-    fi
-
-    if [[ "$DO_ENABLED" == "true" && "$R2_ENABLED" == "true" && "${DO_EXIT:-1}" == "0" ]]; then
-        if [[ -n "$r2_local_backup_result_file" && -f "$r2_local_backup_result_file" ]]; then
-            r2_local_backup_result=$(cat "$r2_local_backup_result_file" 2>/dev/null || true)
-        fi
-        if [[ "${R2_EXIT:-1}" != "0" || "$r2_local_backup_result" == "failed" || "$r2_local_backup_result" == "skipped" ]]; then
-            log "🔁 R2 did not complete today's local backup (${r2_local_backup_result:-exit ${R2_EXIT:-1}}); taking fallback local backup from DO..."
-            "$SCRIPT_DIR/allium-deploy-upload-do.sh" --local-backup-only "$OUTPUT_DIR" ||
-                log "⚠️ DO fallback local backup failed"
         fi
     fi
 

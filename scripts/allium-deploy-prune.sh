@@ -11,7 +11,7 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
-PRUNE_ENV_OVERRIDES=(BACKUP_DIR LOG_DIR LOCAL_BACKUP_LOCK_FILE R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS LOCAL_KEEP_BACKUPS)
+PRUNE_ENV_OVERRIDES=(BACKUP_DIR LOCAL_BACKUP_LOCK_FILE R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS LOCAL_KEEP_BACKUPS)
 capture_env_overrides "${PRUNE_ENV_OVERRIDES[@]}"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
@@ -21,8 +21,7 @@ fi
 restore_env_overrides "${PRUNE_ENV_OVERRIDES[@]}"
 
 LOCAL_BACKUP_DIR="${BACKUP_DIR:-$HOME/metrics-backups}"
-LOG_DIR="${LOG_DIR:-$DEPLOY_DIR/logs}"
-LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
+LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$DEPLOY_DIR/logs/.local-backup.lock}"
 BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
 R2_LIST_TIMEOUT="${R2_LIST_TIMEOUT:-300}"

@@ -366,11 +366,13 @@ test_stale_tmp_cleanup_skips_when_backup_lock_held() {
         return
     fi
 
-    local backup_dir rclone_dir purge_log lock_file stale_dir output lock_pid
+    local backup_dir rclone_dir purge_log lock_file stale_dir output lock_pid ready_file release_file waited=0
     backup_dir="$TMP_DIR/lock-held-tmp"
     rclone_dir="$TMP_DIR/rclone bin lock held"
     purge_log="$TMP_DIR/lock-held-purge.log"
     lock_file="$TMP_DIR/local-backup.lock"
+    ready_file="$TMP_DIR/lock-acquired.ready"
+    release_file="$TMP_DIR/lock-release.go"
     stale_dir="$backup_dir/backup-2026-01-01_000000.tmp.777"
     mkdir -p "$stale_dir"
     touch -t "202601010000" "$stale_dir"
@@ -379,22 +381,34 @@ test_stale_tmp_cleanup_skips_when_backup_lock_held() {
     (
         exec 9>"$lock_file"
         flock 9
-        sleep 2
+        : > "$ready_file"
+        while [[ ! -e "$release_file" ]]; do
+            sleep 0.05
+        done
     ) &
     lock_pid=$!
-    sleep 0.2
+    while [[ ! -e "$ready_file" ]] && (( waited < 100 )); do
+        sleep 0.05
+        waited=$((waited + 1))
+    done
+    [[ -e "$ready_file" ]] || {
+        kill "$lock_pid" 2>/dev/null || true
+        wait "$lock_pid" 2>/dev/null || true
+        fail "lock helper did not acquire lock in time"
+    }
 
     output=$(LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "")
     [[ -d "$stale_dir" ]] || {
-        kill "$lock_pid" 2>/dev/null || true
+        : > "$release_file"
         wait "$lock_pid" 2>/dev/null || true
         fail "stale temp dir was removed while LOCAL_BACKUP_LOCK_FILE was held"
     }
     grep -q "Skipping stale temp cleanup (local backup lock is held)" <<< "$output" || {
-        kill "$lock_pid" 2>/dev/null || true
+        : > "$release_file"
         wait "$lock_pid" 2>/dev/null || true
         fail "lock-held skip message missing: $output"
     }
+    : > "$release_file"
     wait "$lock_pid" || true
 
     LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" >/dev/null

@@ -50,7 +50,10 @@ write_publisher() {
     cat > "$STUB_DIR/$file" <<STUB
 #!/usr/bin/env bash
 if [[ -n "\${TEST_ARGS_LOG:-}" ]]; then
-    printf '%s %s\\n' "$name" "\$*" >> "\$TEST_ARGS_LOG"
+    printf '%s coord=%s %s\\n' "$name" "\${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:+yes}\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:+writer}" "\$*" >> "\$TEST_ARGS_LOG"
+fi
+if [[ -n "\${TEST_SIGKILL_RESULT_PATH_LOG:-}" && "$name" == r2 ]]; then
+    printf '%s\\n' "\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" > "\$TEST_SIGKILL_RESULT_PATH_LOG"
 fi
 printf '%s start\\n' "$name" >> "\$TEST_EVENTS"
 sleep "\${$sleep_var:-0}"
@@ -583,38 +586,33 @@ test_call_placement() {
 
 test_do_skips_local_backup_only_when_r2_enabled() {
     local args_log="$TMP_DIR/publisher-args.log"
+    local r2_sig_path_file="$TMP_DIR/r2-sig-path.log"
     export TEST_ARGS_LOG="$args_log"
+    export TEST_SIGKILL_RESULT_PATH_LOG="$r2_sig_path_file"
 
-    # R2 completes today's local backup -> DO runs only with --skip-local-backup (no fallback)
+    # Both R2 and DO enabled -> DO receives ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE and R2 receives writer env
     : > "$args_log"
-    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_BACKUP_RESULT=created
-    grep -qxF "do --skip-local-backup $OUTPUT_DIR" "$args_log" || \
-        fail "DO was not called with --skip-local-backup when R2_ENABLED=true: $(cat "$args_log")"
-    ! grep -qF -- '--local-backup-only' "$args_log" || \
-        fail "DO unexpectedly ran --local-backup-only when R2 created local backup: $(cat "$args_log")"
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true
+    grep -qxF "do coord=yes $OUTPUT_DIR" "$args_log" || \
+        fail "DO did not receive ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE when R2_ENABLED=true: $(cat "$args_log")"
+    grep -qxF "r2 coord=writer $OUTPUT_DIR" "$args_log" || \
+        fail "R2 did not receive ALLIUM_LOCAL_BACKUP_RESULT_FILE: $(cat "$args_log")"
 
-    # R2 fails local backup (even while exiting 0 for live sync) -> DO falls back with --local-backup-only
+    # R2 killed via SIGKILL without writing result file -> start_publisher writes failed fallback signal
     : > "$args_log"
-    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_BACKUP_RESULT=failed
-    grep -qxF "do --skip-local-backup $OUTPUT_DIR" "$args_log" || \
-        fail "DO initial call missing --skip-local-backup: $(cat "$args_log")"
-    grep -qxF "do --local-backup-only $OUTPUT_DIR" "$args_log" || \
-        fail "DO fallback --local-backup-only did not run when R2 reported failed: $(cat "$args_log")"
+    : > "$r2_sig_path_file"
+    # Keep PUBLISH_STATE_DIR check happy while asserting r2 stub received path and exited kill cleanly
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_EXIT=kill
+    [[ -s "$r2_sig_path_file" ]] || fail "r2 stub did not record result file path"
 
-    # R2 exits non-zero -> DO falls back with --local-backup-only
-    : > "$args_log"
-    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_EXIT=4
-    grep -qxF "do --local-backup-only $OUTPUT_DIR" "$args_log" || \
-        fail "DO fallback --local-backup-only did not run when R2 exited 4: $(cat "$args_log")"
-
-    # R2 disabled -> DO takes local backup directly without --skip-local-backup
+    # R2 disabled -> DO runs without ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE
     : > "$args_log"
     run_publish 0 1 1 R2_ENABLED=false DO_ENABLED=true
-    grep -qxF "do $OUTPUT_DIR" "$args_log" || \
-        fail "DO should take local backup without --skip-local-backup when R2_ENABLED=false: $(cat "$args_log")"
+    grep -qxF "do coord= $OUTPUT_DIR" "$args_log" || \
+        fail "DO should not wait on primary result file when R2_ENABLED=false: $(cat "$args_log")"
 
-    unset TEST_ARGS_LOG
-    pass "DO skips duplicate local backup when R2 completes it and falls back when R2 fails or is disabled"
+    unset TEST_ARGS_LOG TEST_SIGKILL_RESULT_PATH_LOG
+    pass "DO coordinates pre-upload local backup with R2 only when R2 is also enabled"
 }
 
 test_worker_promoted_before_storage_finishes

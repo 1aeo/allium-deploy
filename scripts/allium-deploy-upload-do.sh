@@ -318,6 +318,11 @@ ensure_spaces_remote() {
     fi
 }
 
+if [[ "$REMOTE_BACKUP_ONLY" == "true" && "$LOCAL_BACKUP_ONLY" == "true" ]]; then
+    echo "❌ Error: --remote-backup-only and --local-backup-only cannot be combined" >&2
+    exit 2
+fi
+
 # Handle list action
 if [[ "$ACTION" == "list" ]]; then
     ensure_spaces_remote
@@ -390,9 +395,26 @@ else
 fi
 
 if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
-    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
-    print_sync_summary
-    exit 0
+    fallback_rc=0
+    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || fallback_rc=$?
+    case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+        created|already_done|skipped_disabled|skipped_off)
+            print_sync_summary
+            exit 0
+            ;;
+        *)
+            exit "${fallback_rc:-1}"
+            ;;
+    esac
+fi
+
+if [[ "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
+    backup_needed "$LOCAL_BACKUP_MARKER" "$LOCAL_BACKUP_FREQUENCY" "$FORCE_BACKUP" &&
+    [[ -n "${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
+    if wait_for_primary_local_backup_result "$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ALLIUM_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}"; then
+        # shellcheck disable=SC2034 # Read in sourced allium-deploy-upload-common.sh
+        SKIP_LOCAL_BACKUP=true
+    fi
 fi
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
