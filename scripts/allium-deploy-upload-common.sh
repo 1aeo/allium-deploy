@@ -5,12 +5,26 @@
 # --- Logging ---
 
 STORAGE_NAME=""
+SKIP_LOCAL_BACKUP="${SKIP_LOCAL_BACKUP:-false}"
+_LOCAL_BACKUP_STAGING=""
+_LOCAL_BACKUP_LOCK_OPEN=false
 
 log() {
     if [[ -n "$STORAGE_NAME" ]]; then
         echo "[$STORAGE_NAME] $1"
     else
         echo "$1"
+    fi
+}
+
+cleanup_local_backup_staging() {
+    if [[ -n "${_LOCAL_BACKUP_STAGING:-}" && -d "$_LOCAL_BACKUP_STAGING" ]]; then
+        rm -rf -- "$_LOCAL_BACKUP_STAGING" 2>/dev/null || true
+    fi
+    _LOCAL_BACKUP_STAGING=""
+    if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
+        exec 7>&-
+        _LOCAL_BACKUP_LOCK_OPEN=false
     fi
 }
 
@@ -30,6 +44,10 @@ setup_common_vars() {
     
     LOG_DIR="$DEPLOY_DIR/logs"
     mkdir -p "$LOG_DIR"
+    chmod 700 "$LOG_DIR"
+
+    LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
+    SKIP_LOCAL_BACKUP="${SKIP_LOCAL_BACKUP:-false}"
     
     # Rclone settings (can be overridden per-backend)
     TRANSFERS="${RCLONE_TRANSFERS:-128}"
@@ -196,34 +214,159 @@ backup_needed() {
     return 0
 }
 
+write_marker_atomically() {
+    local marker_file="$1"
+    local value="$2"
+    local marker_dir tmp_file
+
+    marker_dir=$(dirname "$marker_file")
+    mkdir -p "$marker_dir"
+    tmp_file="${marker_file}.tmp.$$"
+    if ! printf '%s\n' "$value" > "$tmp_file" || ! mv -f -- "$tmp_file" "$marker_file"; then
+        rm -f -- "$tmp_file"
+        log "   ❌ Failed to write marker file: $marker_file"
+        return 1
+    fi
+}
+
+wait_for_primary_local_backup_result() {
+    local result_file="${1:-}"
+    local max_wait="${2:-7200}"
+    [[ -n "$result_file" ]] || return 1
+    [[ "$max_wait" =~ ^[1-9][0-9]*$ ]] || max_wait=7200
+
+    local max_iters=$((max_wait * 5))
+    local iter=0 result=""
+    while (( iter < max_iters )); do
+        if [[ -s "$result_file" ]]; then
+            result=$(cat "$result_file" 2>/dev/null || true)
+            case "$result" in
+                created|already_done)
+                    log "⏭️  Skipping local backup (primary storage result: $result)"
+                    return 0
+                    ;;
+                failed|skipped)
+                    log "🔁 Primary storage did not create today's local backup ($result); falling back to this backend"
+                    return 1
+                    ;;
+            esac
+        fi
+        sleep 0.2
+        iter=$((iter + 1))
+    done
+    log "⚠️  Timed out waiting ${max_wait}s for primary local backup result"
+    return 2
+}
+
+_release_local_backup_lock() {
+    if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
+        exec 7>&-
+        _LOCAL_BACKUP_LOCK_OPEN=false
+    fi
+}
+
 create_local_backup() {
     local bucket="$1"
     local marker_file="$2"
     local force_flag="${3:-false}"
     local frequency="${4:-daily}"
-    local rclone_opts
+    local rclone_opts staging_dir final_dir
     local status=0
+    _LOCAL_BACKUP_OUTCOME="failed"
     rclone_opts=$(build_rclone_opts root)
-    
-    if backup_needed "$marker_file" "$frequency" "$force_flag"; then
-        log "📦 Creating local backup..."
-        log "   Target: $LOCAL_BACKUP_DIR/backup-$TIMESTAMP"
-        mkdir -p "$LOCAL_BACKUP_DIR/backup-$TIMESTAMP"
-        run_rclone_logged sync "$bucket" "$LOCAL_BACKUP_DIR/backup-$TIMESTAMP" --exclude "_backups/**" $rclone_opts || status=$?
-        if [[ "$status" != "0" ]]; then
-            log "   ❌ Local backup failed (rclone exit $status); today's backup is not marked done"
-            return "$status"
-        fi
-        echo "$TODAY" > "$marker_file"
-        log "   ✅ Local backup created"
-        return 0
-    elif [[ "$frequency" == "off" ]]; then
-        log "⏭️  Skipping local backup (frequency is off)"
-        return 1
-    else
-        log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
+
+    if [[ "${SKIP_LOCAL_BACKUP:-false}" == "true" && "$force_flag" != "true" ]]; then
+        _LOCAL_BACKUP_OUTCOME="skipped_disabled"
+        log "⏭️  Skipping local backup (handled by primary storage backend)"
         return 1
     fi
+
+    if ! backup_needed "$marker_file" "$frequency" "$force_flag"; then
+        if [[ "$frequency" == "off" ]]; then
+            _LOCAL_BACKUP_OUTCOME="skipped_off"
+            log "⏭️  Skipping local backup (frequency is off)"
+        else
+            _LOCAL_BACKUP_OUTCOME="already_done"
+            log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
+        fi
+        return 1
+    fi
+
+    if command -v flock >/dev/null 2>&1; then
+        local lock_dir _old_umask
+        lock_dir=$(dirname "$LOCAL_BACKUP_LOCK_FILE")
+        mkdir -p "$lock_dir"
+        if [[ "$lock_dir" == "$LOG_DIR" ]]; then
+            chmod 700 "$lock_dir"
+        fi
+        _old_umask=$(umask)
+        umask 077
+        exec 7>"$LOCAL_BACKUP_LOCK_FILE"
+        umask "$_old_umask"
+        chmod 600 "$LOCAL_BACKUP_LOCK_FILE"
+        _LOCAL_BACKUP_LOCK_OPEN=true
+        if ! flock -n 7; then
+            _release_local_backup_lock
+            _LOCAL_BACKUP_OUTCOME="locked"
+            log "⏭️  Skipping local backup (another local backup is already in progress)"
+            return 1
+        fi
+        # Re-check after acquiring lock in case a concurrent process just completed.
+        if ! backup_needed "$marker_file" "$frequency" "$force_flag"; then
+            _release_local_backup_lock
+            if [[ "$frequency" == "off" ]]; then
+                _LOCAL_BACKUP_OUTCOME="skipped_off"
+                log "⏭️  Skipping local backup (frequency is off)"
+            else
+                _LOCAL_BACKUP_OUTCOME="already_done"
+                log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
+            fi
+            return 1
+        fi
+    fi
+
+    mkdir -p "$LOCAL_BACKUP_DIR"
+    staging_dir="$LOCAL_BACKUP_DIR/backup-${TIMESTAMP}.tmp.$$"
+    final_dir="$LOCAL_BACKUP_DIR/backup-$TIMESTAMP"
+    if [[ -e "$final_dir" ]]; then
+        final_dir="$LOCAL_BACKUP_DIR/backup-${TIMESTAMP}-$$"
+    fi
+
+    rm -rf -- "$staging_dir"
+    mkdir -p "$staging_dir"
+    _LOCAL_BACKUP_STAGING="$staging_dir"
+
+    log "📦 Creating local backup..."
+    log "   Target: $final_dir"
+    run_rclone_logged sync "$bucket" "$staging_dir" --exclude "_backups/**" $rclone_opts || status=$?
+    if [[ "$status" != "0" ]]; then
+        rm -rf -- "$staging_dir"
+        _LOCAL_BACKUP_STAGING=""
+        _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
+        log "   ❌ Local backup failed (rclone exit $status); today's backup is not marked done"
+        return "$status"
+    fi
+
+    if ! mv -- "$staging_dir" "$final_dir"; then
+        rm -rf -- "$staging_dir"
+        _LOCAL_BACKUP_STAGING=""
+        _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
+        log "   ❌ Failed to finalize local backup directory: $final_dir"
+        return 1
+    fi
+    _LOCAL_BACKUP_STAGING=""
+
+    if ! write_marker_atomically "$marker_file" "$TODAY"; then
+        _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
+        return 1
+    fi
+    _release_local_backup_lock
+    _LOCAL_BACKUP_OUTCOME="created"
+    log "   ✅ Local backup created"
+    return 0
 }
 
 create_remote_backup() {
@@ -243,7 +386,7 @@ create_remote_backup() {
             log "   ❌ Remote backup failed (rclone exit $status); today's backup is not marked done"
             return "$status"
         fi
-        echo "$TODAY" > "$marker_file"
+        write_marker_atomically "$marker_file" "$TODAY" || return 1
         log "   ✅ Remote backup created"
         return 0
     elif [[ "$frequency" == "off" ]]; then
@@ -294,9 +437,23 @@ list_backups() {
     local local_marker="$2"
     local remote_marker="$3"
     local storage_name="$4"
+    local -a local_list=()
+    local candidate
     
     echo "📦 Local backups:"
-    ls -1dt "$LOCAL_BACKUP_DIR"/backup-* 2>/dev/null | head -5 || echo "   (none)"
+    if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
+        shopt -s nullglob
+        for candidate in "$LOCAL_BACKUP_DIR"/backup-*; do
+            [[ "$(basename "$candidate")" == *.tmp.* ]] && continue
+            local_list+=("$candidate")
+        done
+        shopt -u nullglob
+    fi
+    if (( ${#local_list[@]} > 0 )); then
+        ls -1dt "${local_list[@]}" 2>/dev/null | head -5 || echo "   (none)"
+    else
+        echo "   (none)"
+    fi
     echo ""
     echo "📦 $storage_name backups:"
     $RCLONE lsf "$bucket/_backups/" --dirs-only 2>/dev/null | sort -r | head -5 || echo "   (none)"
@@ -315,9 +472,10 @@ Usage: $script_name [source_dir]
        $script_name --force-backup [source_dir]
 
 Options:
-  --list-backups   List available local and remote backups
-  --force-backup   Force both local and remote backups even if done today
-                   or their frequency is off
+  --list-backups       List available local and remote backups
+  --force-backup       Force both local and remote backups even if done today
+                       or their frequency is off
+  --skip-local-backup  Skip local backup for this run (unless --force-backup)
 
 Rollback from local backup:
   $script_name ~/metrics-backups/backup-YYYY-MM-DD_HHMMSS

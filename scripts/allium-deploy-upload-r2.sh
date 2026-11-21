@@ -7,30 +7,121 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/allium-deploy-upload-common.sh"
 
 # Parse arguments
+ACTION=""
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
 FORCE_CONTENT_SYNC=false
-case "${1:-}" in
-    --force-backup)
-        FORCE_BACKUP=true
-        SOURCE_DIR_ARG="${2:-}"
-        ;;
-    --force-content-sync)
-        FORCE_CONTENT_SYNC=true
-        SOURCE_DIR_ARG="${2:-}"
-        ;;
-    --list-backups|--help|-h) ;;
-    *) SOURCE_DIR_ARG="${1:-}" ;;
-esac
+CLI_SKIP_LOCAL_BACKUP=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list-backups)
+            ACTION="list"
+            shift
+            ;;
+        --force-backup)
+            FORCE_BACKUP=true
+            shift
+            ;;
+        --force-content-sync)
+            FORCE_CONTENT_SYNC=true
+            shift
+            ;;
+        --skip-local-backup)
+            CLI_SKIP_LOCAL_BACKUP=true
+            shift
+            ;;
+        --help|-h)
+            ACTION="help"
+            shift
+            ;;
+        --)
+            shift
+            if [[ $# -gt 0 ]]; then
+                SOURCE_DIR_ARG="$1"
+                shift
+            fi
+            break
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            SOURCE_DIR_ARG="$1"
+            shift
+            ;;
+    esac
+done
+
+print_r2_help() {
+    cat <<EOF
+Usage: $0 [source_dir]
+       $0 --force-content-sync [source_dir]
+       $0 --list-backups
+       $0 --force-backup [source_dir]
+
+Options:
+  --force-content-sync  Synchronize and verify live R2 content even if today's
+                        daily success marker already exists
+  --list-backups        List available local and remote backups
+  --force-backup        Force both local and remote backups even if done today
+                        or their frequency is off
+  --skip-local-backup   Skip local backup for this run (unless --force-backup)
+
+R2_CONTENT_SYNC_INTERVAL accepts every-build (the safe default) or daily.
+Daily mode retries every invocation until upload and verification both pass.
+
+LOCAL_BACKUP_FREQUENCY and R2_BACKUP_FREQUENCY accept daily (the default),
+every-run or off.
+EOF
+}
+
+if [[ "$ACTION" == "help" ]]; then
+    print_r2_help
+    exit 0
+fi
+
+_r2_local_backup_reported=false
+report_r2_local_backup_result() {
+    local outcome="$1" tmp_file
+    [[ -n "${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" ]] || return 0
+    tmp_file="${ALLIUM_LOCAL_BACKUP_RESULT_FILE}.tmp.$$"
+    mkdir -p "$(dirname "$ALLIUM_LOCAL_BACKUP_RESULT_FILE")" 2>/dev/null || return 0
+    if printf '%s\n' "$outcome" > "$tmp_file" 2>/dev/null && mv -f -- "$tmp_file" "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" 2>/dev/null; then
+        _r2_local_backup_reported=true
+    else
+        rm -f -- "$tmp_file" 2>/dev/null || true
+    fi
+    return 0
+}
+
+cleanup_r2_exit() {
+    cleanup_local_backup_staging
+    if [[ "${_r2_local_backup_reported:-false}" != "true" ]]; then
+        report_r2_local_backup_result failed || true
+    fi
+}
 
 setup_common_vars
+trap cleanup_r2_exit EXIT
 STORAGE_NAME="R2"
+if [[ "$CLI_SKIP_LOCAL_BACKUP" == "true" ]]; then
+    SKIP_LOCAL_BACKUP=true
+elif [[ -n "${ALLIUM_SKIP_LOCAL_BACKUP:-}" ]]; then
+    case "$ALLIUM_SKIP_LOCAL_BACKUP" in
+        true|false) SKIP_LOCAL_BACKUP="$ALLIUM_SKIP_LOCAL_BACKUP" ;;
+        *)
+            echo "❌ Error: ALLIUM_SKIP_LOCAL_BACKUP must be true or false (got: $ALLIUM_SKIP_LOCAL_BACKUP)" >&2
+            exit 2
+            ;;
+    esac
+fi
 
 # R2 configuration
 R2_BUCKET_NAME="${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 BUCKET="r2-metrics:${R2_BUCKET_NAME}"
 
-LOCAL_BACKUP_MARKER="$LOG_DIR/last-local-backup-date"
+LOCAL_BACKUP_MARKER="${LOCAL_BACKUP_MARKER:-$LOG_DIR/last-local-backup-date}"
 R2_BACKUP_MARKER="$LOG_DIR/last-r2-backup-date"
 R2_CONTENT_SYNC_INTERVAL="${R2_CONTENT_SYNC_INTERVAL:-every-build}"
 R2_CONTENT_SYNC_MARKER="${R2_CONTENT_SYNC_MARKER:-$LOG_DIR/last-r2-content-sync-date}"
@@ -165,38 +256,16 @@ write_content_sync_marker() {
     fi
 }
 
-print_r2_help() {
-    cat <<EOF
-Usage: $0 [source_dir]
-       $0 --force-content-sync [source_dir]
-       $0 --list-backups
-       $0 --force-backup [source_dir]
-
-Options:
-  --force-content-sync  Synchronize and verify live R2 content even if today's
-                        daily success marker already exists
-  --list-backups        List available local and remote backups
-  --force-backup        Force both local and remote backups even if done today
-                        or their frequency is off
-
-R2_CONTENT_SYNC_INTERVAL accepts every-build (the safe default) or daily.
-Daily mode retries every invocation until upload and verification both pass.
-
-LOCAL_BACKUP_FREQUENCY and R2_BACKUP_FREQUENCY accept daily (the default),
-every-run or off.
-EOF
-}
-
 ensure_r2_remote() {
     local r2_key="${R2_ACCESS_KEY_ID:-}"
     local r2_secret="${R2_SECRET_ACCESS_KEY:-}"
     local cf_account="${CLOUDFLARE_ACCOUNT_ID:-}"
-    
+
     if [[ -z "$r2_key" ]] || [[ -z "$r2_secret" ]]; then
         echo "❌ Error: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in config.env"
         exit 1
     fi
-    
+
     if ! $RCLONE listremotes 2>/dev/null | grep -q "^r2-metrics:$"; then
         echo "📦 Configuring rclone 'r2-metrics' remote..."
         $RCLONE config create r2-metrics s3 \
@@ -210,19 +279,13 @@ ensure_r2_remote() {
     fi
 }
 
-# Handle arguments
-case "${1:-}" in
-    --list-backups)
-        ensure_r2_remote
-        list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$R2_BACKUP_MARKER" "R2"
-        exit 0
-        ;;
-    --force-backup|--force-content-sync) ;;
-    --help|-h)
-        print_r2_help
-        exit 0
-        ;;
-esac
+# Handle list action
+if [[ "$ACTION" == "list" ]]; then
+    _r2_local_backup_reported=true
+    ensure_r2_remote
+    list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$R2_BACKUP_MARKER" "R2"
+    exit 0
+fi
 
 [[ ! -d "$SOURCE_DIR" ]] && { echo "❌ Error: Source directory not found: $SOURCE_DIR"; exit 1; }
 validate_content_sync_interval
@@ -239,6 +302,11 @@ log "   Bucket: $R2_BUCKET_NAME"
 log "   Parallel: $TRANSFERS transfers, $CHECKERS checkers"
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
+case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+    created|already_done) report_r2_local_backup_result "$_LOCAL_BACKUP_OUTCOME" ;;
+    skipped_*) report_r2_local_backup_result skipped ;;
+    *) report_r2_local_backup_result failed ;;
+esac
 create_remote_backup "$BUCKET" "$R2_BACKUP_MARKER" "$FORCE_BACKUP" "$R2_BACKUP_FREQUENCY" || true
 
 if content_sync_needed; then

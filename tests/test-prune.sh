@@ -327,6 +327,99 @@ test_local_permission_failure_is_reported() {
     pass "local permission failures are reported"
 }
 
+test_local_keep_backups_and_tmp_handling() {
+    local backup_dir rclone_dir purge_log i r2_listing remaining output
+    backup_dir="$TMP_DIR/local-keep-and-tmp"
+    rclone_dir="$TMP_DIR/rclone bin local keep"
+    purge_log="$TMP_DIR/local-keep-purge.log"
+    mkdir -p "$backup_dir"
+    make_rclone_stub "$rclone_dir"
+
+    r2_listing=""
+    for i in 1 2 3 4 5 6; do
+        mkdir -p "$backup_dir/backup-0$i"
+        touch -t "20260101010$i" "$backup_dir/backup-0$i"
+        r2_listing+="backup-0$i/"$'\n'
+    done
+    # Active staging dir (fresh) should be untouched; stale (>24h) staging dir should be removed
+    mkdir -p "$backup_dir/backup-2026-11-21_000000.tmp.111"
+    mkdir -p "$backup_dir/backup-2026-01-01_000000.tmp.999"
+    touch -t "202601010000" "$backup_dir/backup-2026-01-01_000000.tmp.999"
+
+    LOCAL_KEEP_BACKUPS=2 run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "$r2_listing" >/dev/null
+
+    remaining=$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -exec basename {} \; | sort | paste -sd ' ' -)
+    [[ "$remaining" == "backup-05 backup-06 backup-2026-11-21_000000.tmp.111" ]] || \
+        fail "unexpected local/tmp state after LOCAL_KEEP_BACKUPS=2: $remaining"
+    [[ ! -s "$purge_log" ]] || fail "R2 backups should not have been pruned when KEEP_BACKUPS=5"
+
+    if output=$(LOCAL_KEEP_BACKUPS=0 run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" 2>&1); then
+        fail "invalid LOCAL_KEEP_BACKUPS=0 did not fail"
+    fi
+    grep -q "Invalid LOCAL_KEEP_BACKUPS=0" <<< "$output" || fail "invalid LOCAL_KEEP_BACKUPS message missing: $output"
+    pass "LOCAL_KEEP_BACKUPS works independently, ignores active .tmp.*, cleans stale .tmp.*, and validates integers"
+}
+
+test_stale_tmp_cleanup_skips_when_backup_lock_held() {
+    if ! command -v flock >/dev/null 2>&1; then
+        pass "lock-held stale temp test skipped (flock unavailable)"
+        return
+    fi
+
+    local backup_dir rclone_dir purge_log lock_file stale_dir output lock_pid ready_file release_file waited=0
+    backup_dir="$TMP_DIR/lock-held-tmp"
+    rclone_dir="$TMP_DIR/rclone bin lock held"
+    purge_log="$TMP_DIR/lock-held-purge.log"
+    lock_file="$TMP_DIR/local-backup.lock"
+    ready_file="$TMP_DIR/lock-acquired.ready"
+    release_file="$TMP_DIR/lock-release.go"
+    stale_dir="$backup_dir/backup-2026-01-01_000000.tmp.777"
+    mkdir -p "$stale_dir"
+    touch -t "202601010000" "$stale_dir"
+    make_rclone_stub "$rclone_dir"
+
+    (
+        exec 9>"$lock_file"
+        flock 9
+        : > "$ready_file"
+        while [[ ! -e "$release_file" ]]; do
+            sleep 0.05
+        done
+    ) &
+    lock_pid=$!
+    while [[ ! -e "$ready_file" ]] && (( waited < 100 )); do
+        sleep 0.05
+        waited=$((waited + 1))
+    done
+    [[ -e "$ready_file" ]] || {
+        kill "$lock_pid" 2>/dev/null || true
+        wait "$lock_pid" 2>/dev/null || true
+        fail "lock helper did not acquire lock in time"
+    }
+
+    output=$(LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "") || {
+        : > "$release_file"
+        wait "$lock_pid" 2>/dev/null || true
+        fail "prune failed while LOCAL_BACKUP_LOCK_FILE was held: $output"
+    }
+    [[ -d "$stale_dir" ]] || {
+        : > "$release_file"
+        wait "$lock_pid" 2>/dev/null || true
+        fail "stale temp dir was removed while LOCAL_BACKUP_LOCK_FILE was held"
+    }
+    grep -q "Skipping stale temp cleanup (local backup lock is held)" <<< "$output" || {
+        : > "$release_file"
+        wait "$lock_pid" 2>/dev/null || true
+        fail "lock-held skip message missing: $output"
+    }
+    : > "$release_file"
+    wait "$lock_pid" || true
+
+    LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" >/dev/null
+    [[ ! -e "$stale_dir" ]] || fail "stale temp dir was not removed after LOCAL_BACKUP_LOCK_FILE was released"
+    pass "stale temp cleanup skips while LOCAL_BACKUP_LOCK_FILE is held and runs once released"
+}
+
 test_empty_backup_sets_skip_cleanly
 test_environment_overrides_config_env
 test_multiple_backups_prune_oldest
@@ -338,3 +431,5 @@ test_r2_listing_sigkill_failure_is_reported
 test_r2_purge_failure_is_reported
 test_local_enumeration_failure_is_reported
 test_local_permission_failure_is_reported
+test_local_keep_backups_and_tmp_handling
+test_stale_tmp_cleanup_skips_when_backup_lock_held

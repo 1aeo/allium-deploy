@@ -49,10 +49,31 @@ write_publisher() {
     local file="$1" name="$2" sleep_var="$3" exit_var="$4"
     cat > "$STUB_DIR/$file" <<STUB
 #!/usr/bin/env bash
+if [[ -n "\${TEST_ARGS_LOG:-}" ]]; then
+    printf '%s coord=%s %s\\n' "$name" "\${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:+yes}\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:+writer}" "\$*" >> "\$TEST_ARGS_LOG"
+fi
+if [[ -n "\${TEST_SIGKILL_RESULT_PATH_LOG:-}" && "$name" == r2 ]]; then
+    printf '%s\\n' "\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" > "\$TEST_SIGKILL_RESULT_PATH_LOG"
+fi
+if [[ -n "\${TEST_DO_OBSERVED_RESULT_LOG:-}" && "$name" == do && -n "\${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
+    _obs_iter=0
+    while [[ ! -s "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" ]] && (( _obs_iter < 50 )); do
+        sleep 0.1
+        _obs_iter=\$((_obs_iter + 1))
+    done
+    if [[ -s "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" ]]; then
+        cat "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" > "\$TEST_DO_OBSERVED_RESULT_LOG"
+    else
+        printf 'missing\\n' > "\$TEST_DO_OBSERVED_RESULT_LOG"
+    fi
+fi
 printf '%s start\\n' "$name" >> "\$TEST_EVENTS"
 sleep "\${$sleep_var:-0}"
 printf '%s end\\n' "$name" >> "\$TEST_EVENTS"
 [[ "\${$exit_var:-0}" != kill ]] || kill -KILL \$\$
+if [[ "$name" == r2 && -n "\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" && -n "\${R2_STUB_BACKUP_RESULT:-}" ]]; then
+    printf '%s\\n' "\$R2_STUB_BACKUP_RESULT" > "\$ALLIUM_LOCAL_BACKUP_RESULT_FILE"
+fi
 exit "\${$exit_var:-0}"
 STUB
     chmod +x "$STUB_DIR/$file"
@@ -158,7 +179,7 @@ run_publish() {
     local assignment
     export CF_SLEEP="$1" DO_SLEEP="$2" R2_SLEEP="$3"
     shift 3
-    export CF_STUB_EXIT=0 DO_STUB_EXIT=0 R2_STUB_EXIT=0 PROMOTE_STUB_EXIT=0 MKTEMP_MODE=""
+    export CF_STUB_EXIT=0 DO_STUB_EXIT=0 R2_STUB_EXIT=0 R2_STUB_BACKUP_RESULT="" PROMOTE_STUB_EXIT=0 MKTEMP_MODE=""
     export CHARTS_SLEEP=0 CHARTS_STUB_EXIT=0 CHARTS_PROMOTE_STUB_EXIT=0 ROUTE_STUB_EXIT=0 REDIRECTS_STUB_EXIT=0
     R2_ENABLED=true
     DO_ENABLED=true
@@ -575,6 +596,43 @@ test_call_placement() {
     pass "the job publishes through publish_in_restore_order before deciding its exit"
 }
 
+test_do_skips_local_backup_only_when_r2_enabled() {
+    local args_log="$TMP_DIR/publisher-args.log"
+    local r2_sig_path_file="$TMP_DIR/r2-sig-path.log"
+    local do_observed_result_file="$TMP_DIR/do-observed-result.log"
+    export TEST_ARGS_LOG="$args_log"
+    export TEST_SIGKILL_RESULT_PATH_LOG="$r2_sig_path_file"
+
+    # Both R2 and DO enabled -> DO receives ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE and R2 receives writer env
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true
+    grep -qxF "do coord=yes $OUTPUT_DIR" "$args_log" || \
+        fail "DO did not receive ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE when R2_ENABLED=true: $(cat "$args_log")"
+    grep -qxF "r2 coord=writer $OUTPUT_DIR" "$args_log" || \
+        fail "R2 did not receive ALLIUM_LOCAL_BACKUP_RESULT_FILE: $(cat "$args_log")"
+
+    # R2 killed via SIGKILL without writing result file -> start_publisher writes failed fallback signal
+    : > "$args_log"
+    : > "$r2_sig_path_file"
+    : > "$do_observed_result_file"
+    export TEST_DO_OBSERVED_RESULT_LOG="$do_observed_result_file"
+    # Keep PUBLISH_STATE_DIR check happy while asserting r2 stub received path and DO observed failed fallback
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_EXIT=kill
+    [[ -s "$r2_sig_path_file" ]] || fail "r2 stub did not record result file path"
+    [[ "$(cat "$do_observed_result_file")" == "failed" ]] || \
+        fail "DO did not observe failed SIGKILL fallback result (got: $(cat "$do_observed_result_file"))"
+    unset TEST_DO_OBSERVED_RESULT_LOG
+
+    # R2 disabled -> DO runs without ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=false DO_ENABLED=true
+    grep -qxF "do coord= $OUTPUT_DIR" "$args_log" || \
+        fail "DO should not wait on primary result file when R2_ENABLED=false: $(cat "$args_log")"
+
+    unset TEST_ARGS_LOG TEST_SIGKILL_RESULT_PATH_LOG
+    pass "DO coordinates pre-upload local backup with R2 only when R2 is also enabled"
+}
+
 test_worker_promoted_before_storage_finishes
 test_slow_worker_unchanged
 test_failures_keep_exit_inputs
@@ -586,3 +644,4 @@ test_layout_marker_and_classes
 test_live_charts_list
 test_charts_timing_and_warning_pings
 test_call_placement
+test_do_skips_local_backup_only_when_r2_enabled

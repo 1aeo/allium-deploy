@@ -680,6 +680,10 @@ start_publisher() {
         trap - EXIT
         status=0
         "$@" || status=$?
+        if [[ "$name" == r2 && -n "${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" && ! -s "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" ]]; then
+            local tmp_res="${ALLIUM_LOCAL_BACKUP_RESULT_FILE}.tmp.${BASHPID:-$$}"
+            printf 'failed\n' > "$tmp_res" 2>/dev/null && mv -f -- "$tmp_res" "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" 2>/dev/null || rm -f -- "$tmp_res" 2>/dev/null || true
+        fi
         if [[ -n "$PUBLISH_STATE_DIR" ]]; then
             date +%s > "$PUBLISH_STATE_DIR/$name.finished" 2>/dev/null || true
         fi
@@ -832,8 +836,12 @@ record_withheld_promotion() {
 # Workers failure, if any.
 publish_in_restore_order() {
     local charts_pid="" cf_pid="" do_pid="" r2_pid=""
+    local r2_local_backup_result_file=""
 
     PUBLISH_STATE_DIR=$(mktemp -d 2>/dev/null) || PUBLISH_STATE_DIR=""
+    if [[ "$DO_ENABLED" == "true" && "$R2_ENABLED" == "true" && -n "$PUBLISH_STATE_DIR" ]]; then
+        r2_local_backup_result_file="$PUBLISH_STATE_DIR/r2-local-backup.result"
+    fi
     UPLOAD_START=$(date +%s)
     UPLOAD_SUCCESS=false
     CF_ASSETS_EXIT="$CF_ASSETS_PREPARE_EXIT"
@@ -863,13 +871,21 @@ publish_in_restore_order() {
 
     if [[ "$DO_ENABLED" == "true" ]]; then
         log "🚀 Starting DO Spaces upload..."
-        start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
+        if [[ -n "$r2_local_backup_result_file" ]]; then
+            start_publisher do-spaces env ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
+        else
+            start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
+        fi
         do_pid=$!
     fi
 
     if [[ "$R2_ENABLED" == "true" ]]; then
         log "🚀 Starting R2 upload..."
-        start_publisher r2 stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
+        if [[ -n "$r2_local_backup_result_file" ]]; then
+            ALLIUM_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" start_publisher r2 env ALLIUM_LOCAL_BACKUP_RESULT_FILE="$r2_local_backup_result_file" stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
+        else
+            start_publisher r2 stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-r2.sh" "$OUTPUT_DIR"
+        fi
         r2_pid=$!
     fi
 
