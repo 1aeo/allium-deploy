@@ -55,6 +55,18 @@ fi
 if [[ -n "\${TEST_SIGKILL_RESULT_PATH_LOG:-}" && "$name" == r2 ]]; then
     printf '%s\\n' "\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" > "\$TEST_SIGKILL_RESULT_PATH_LOG"
 fi
+if [[ -n "\${TEST_DO_OBSERVED_RESULT_LOG:-}" && "$name" == do && -n "\${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
+    _obs_iter=0
+    while [[ ! -s "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" ]] && (( _obs_iter < 50 )); do
+        sleep 0.1
+        _obs_iter=\$((_obs_iter + 1))
+    done
+    if [[ -s "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" ]]; then
+        cat "\$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" > "\$TEST_DO_OBSERVED_RESULT_LOG"
+    else
+        printf 'missing\\n' > "\$TEST_DO_OBSERVED_RESULT_LOG"
+    fi
+fi
 printf '%s start\\n' "$name" >> "\$TEST_EVENTS"
 sleep "\${$sleep_var:-0}"
 printf '%s end\\n' "$name" >> "\$TEST_EVENTS"
@@ -587,6 +599,7 @@ test_call_placement() {
 test_do_skips_local_backup_only_when_r2_enabled() {
     local args_log="$TMP_DIR/publisher-args.log"
     local r2_sig_path_file="$TMP_DIR/r2-sig-path.log"
+    local do_observed_result_file="$TMP_DIR/do-observed-result.log"
     export TEST_ARGS_LOG="$args_log"
     export TEST_SIGKILL_RESULT_PATH_LOG="$r2_sig_path_file"
 
@@ -601,9 +614,14 @@ test_do_skips_local_backup_only_when_r2_enabled() {
     # R2 killed via SIGKILL without writing result file -> start_publisher writes failed fallback signal
     : > "$args_log"
     : > "$r2_sig_path_file"
-    # Keep PUBLISH_STATE_DIR check happy while asserting r2 stub received path and exited kill cleanly
+    : > "$do_observed_result_file"
+    export TEST_DO_OBSERVED_RESULT_LOG="$do_observed_result_file"
+    # Keep PUBLISH_STATE_DIR check happy while asserting r2 stub received path and DO observed failed fallback
     run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_EXIT=kill
     [[ -s "$r2_sig_path_file" ]] || fail "r2 stub did not record result file path"
+    [[ "$(cat "$do_observed_result_file")" == "failed" ]] || \
+        fail "DO did not observe failed SIGKILL fallback result (got: $(cat "$do_observed_result_file"))"
+    unset TEST_DO_OBSERVED_RESULT_LOG
 
     # R2 disabled -> DO runs without ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE
     : > "$args_log"

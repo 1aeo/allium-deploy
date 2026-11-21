@@ -46,6 +46,7 @@ printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'printf "%s\n" "$*" >> "$MOCK_RCLONE_CALLS"' \
+    'if [[ -n "${MOCK_BACKUP_SLEEP:-}" && "${1:-}" == sync && "${3:-}" == */backups/backup-* ]]; then sleep "$MOCK_BACKUP_SLEEP"; fi' \
     'if [[ -n "${MOCK_FAIL_BACKUPS:-}" && "${1:-}" == sync && ( "${3:-}" == */backups/backup-* || "${3:-}" == *:test-bucket/_backups/* ) ]]; then echo "mock backup failure" >&2; exit 7; fi' \
     'if [[ -n "${MOCK_RCLONE_STDERR:-}" && "${1:-}" == sync ]]; then echo "$MOCK_RCLONE_STDERR" >&2; fi' \
     'case "${1:-}" in' \
@@ -460,5 +461,32 @@ do_live_line=$(grep -nE "sync $OUT spaces-metrics:test-bucket " "$MOCK_CALLS" | 
 rm -f "$R2_LOCAL_MARKER" "$DO_LOCAL_MARKER"
 run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= MOCK_FAIL_BACKUPS=1 LOCAL_BACKUP_FREQUENCY=daily -- --local-backup-only "$OUT"
 [[ "$RUN_STATUS" != 0 ]] || fail "--local-backup-only exited 0 despite backup failure"
-pass "DO coordinates pre-upload local backup with R2 and preserves pre-upload snapshot on R2 failure"
+
+# Verify wait timeout while R2 holds the backup lock (and then fails) aborts DO before overwriting live content
+rm -f "$R2_LOCAL_MARKER" "$R2_MARKER" "$DO_LOCAL_MARKER" "$DO_MARKER" "$result_signal"
+: > "$MOCK_CALLS"
+env "${common_env[@]}" MOCK_BACKUP_SLEEP=2 MOCK_FAIL_BACKUPS=1 ALLIUM_LOCAL_BACKUP_RESULT_FILE="$result_signal" LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-r2.sh" "$OUT" > "$TMP_DIR/r2-timeout-coord.log" 2>&1 &
+r2_c_pid=$!
+env "${common_env[@]}" DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$result_signal" ALLIUM_LOCAL_BACKUP_WAIT_TIMEOUT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off \
+    "$DEPLOY_COPY/scripts/allium-deploy-upload-do.sh" "$OUT" > "$TMP_DIR/do-timeout-coord.log" 2>&1 &
+do_c_pid=$!
+rc_r2=0 rc_do=0
+wait "$r2_c_pid" || rc_r2=$?
+wait "$do_c_pid" || rc_do=$?
+[[ "$rc_do" != 0 ]] || fail "DO did not fail after primary wait timeout"
+[[ "$(count_calls "sync $OUT spaces-metrics:test-bucket ")" == 0 ]] || \
+    fail "DO overwrote live bucket despite primary wait timeout"
+grep -Fq 'aborting DO upload to preserve pre-upload snapshot' "$TMP_DIR/do-timeout-coord.log" || \
+    fail "DO timeout abort message missing: $(cat "$TMP_DIR/do-timeout-coord.log")"
+
+# Verify coordinated DO fallback failing due to lock contention also aborts before live sync
+printf 'failed\n' > "$result_signal"
+rm -f "$R2_LOCAL_MARKER" "$DO_LOCAL_MARKER"
+run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE="$result_signal" MOCK_FLOCK_NONBLOCK_EXIT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
+[[ "$RUN_STATUS" != 0 ]] || fail "coordinated DO fallback exited 0 despite lock contention"
+[[ "$(count_calls "sync $OUT spaces-metrics:test-bucket ")" == 0 ]] || \
+    fail "coordinated DO fallback overwrote live bucket despite lock contention"
+
+pass "DO coordinates pre-upload local backup with R2 and preserves pre-upload snapshot on R2 failure or timeout"
 

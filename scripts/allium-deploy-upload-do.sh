@@ -408,16 +408,33 @@ if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
     esac
 fi
 
+coordinating_with_primary=false
 if [[ "${SKIP_LOCAL_BACKUP:-false}" != "true" ]] &&
     backup_needed "$LOCAL_BACKUP_MARKER" "$LOCAL_BACKUP_FREQUENCY" "$FORCE_BACKUP" &&
     [[ -n "${ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE:-}" ]]; then
-    if wait_for_primary_local_backup_result "$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ALLIUM_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}"; then
+    coordinating_with_primary=true
+    coord_wait_rc=0
+    wait_for_primary_local_backup_result "$ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE" "${ALLIUM_LOCAL_BACKUP_WAIT_TIMEOUT:-7200}" || coord_wait_rc=$?
+    if [[ "$coord_wait_rc" -eq 0 ]]; then
         # shellcheck disable=SC2034 # Read in sourced allium-deploy-upload-common.sh
         SKIP_LOCAL_BACKUP=true
+    elif [[ "$coord_wait_rc" -eq 2 ]]; then
+        log "❌ Timed out waiting for primary local backup; aborting DO upload to preserve pre-upload snapshot"
+        exit 1
     fi
 fi
 
-create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
+local_backup_rc=0
+create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || local_backup_rc=$?
+if [[ "$coordinating_with_primary" == "true" ]]; then
+    case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+        created|already_done|skipped_disabled|skipped_off) ;;
+        *)
+            log "❌ Fallback local backup did not complete (${_LOCAL_BACKUP_OUTCOME:-failed}); aborting DO upload to preserve pre-upload snapshot"
+            exit "${local_backup_rc:-1}"
+            ;;
+    esac
+fi
 # A backup that is off does not wait for the DO I/O lock unless forced.
 if [[ "$DO_REMOTE_BACKUP_INLINE" == "true" &&
     ( "$DO_BACKUP_FREQUENCY" != "off" || "$FORCE_BACKUP" == "true" ) ]]; then

@@ -397,7 +397,11 @@ test_stale_tmp_cleanup_skips_when_backup_lock_held() {
         fail "lock helper did not acquire lock in time"
     }
 
-    output=$(LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "")
+    output=$(LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "") || {
+        : > "$release_file"
+        wait "$lock_pid" 2>/dev/null || true
+        fail "prune failed while LOCAL_BACKUP_LOCK_FILE was held: $output"
+    }
     [[ -d "$stale_dir" ]] || {
         : > "$release_file"
         wait "$lock_pid" 2>/dev/null || true
