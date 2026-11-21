@@ -81,8 +81,29 @@ if [[ "$ACTION" == "help" ]]; then
     exit 0
 fi
 
+_r2_local_backup_reported=false
+report_r2_local_backup_result() {
+    local outcome="$1" tmp_file
+    [[ -n "${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" ]] || return 0
+    tmp_file="${ALLIUM_LOCAL_BACKUP_RESULT_FILE}.tmp.$$"
+    mkdir -p "$(dirname "$ALLIUM_LOCAL_BACKUP_RESULT_FILE")" 2>/dev/null || return 0
+    if printf '%s\n' "$outcome" > "$tmp_file" 2>/dev/null && mv -f -- "$tmp_file" "$ALLIUM_LOCAL_BACKUP_RESULT_FILE" 2>/dev/null; then
+        _r2_local_backup_reported=true
+    else
+        rm -f -- "$tmp_file" 2>/dev/null || true
+    fi
+    return 0
+}
+
+cleanup_r2_exit() {
+    cleanup_local_backup_staging
+    if [[ "${_r2_local_backup_reported:-false}" != "true" ]]; then
+        report_r2_local_backup_result failed || true
+    fi
+}
+
 setup_common_vars
-trap cleanup_local_backup_staging EXIT
+trap cleanup_r2_exit EXIT
 STORAGE_NAME="R2"
 if [[ "$CLI_SKIP_LOCAL_BACKUP" == "true" ]]; then
     SKIP_LOCAL_BACKUP=true
@@ -260,6 +281,7 @@ ensure_r2_remote() {
 
 # Handle list action
 if [[ "$ACTION" == "list" ]]; then
+    _r2_local_backup_reported=true
     ensure_r2_remote
     list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$R2_BACKUP_MARKER" "R2"
     exit 0
@@ -280,6 +302,11 @@ log "   Bucket: $R2_BUCKET_NAME"
 log "   Parallel: $TRANSFERS transfers, $CHECKERS checkers"
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
+case "${_LOCAL_BACKUP_OUTCOME:-failed}" in
+    created|already_done) report_r2_local_backup_result "$_LOCAL_BACKUP_OUTCOME" ;;
+    skipped_*) report_r2_local_backup_result skipped ;;
+    *) report_r2_local_backup_result failed ;;
+esac
 create_remote_backup "$BUCKET" "$R2_BACKUP_MARKER" "$FORCE_BACKUP" "$R2_BACKUP_FREQUENCY" || true
 
 if content_sync_needed; then

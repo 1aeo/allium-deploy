@@ -11,7 +11,7 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
-PRUNE_ENV_OVERRIDES=(BACKUP_DIR R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS LOCAL_KEEP_BACKUPS)
+PRUNE_ENV_OVERRIDES=(BACKUP_DIR LOG_DIR LOCAL_BACKUP_LOCK_FILE R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS LOCAL_KEEP_BACKUPS)
 capture_env_overrides "${PRUNE_ENV_OVERRIDES[@]}"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
@@ -21,6 +21,8 @@ fi
 restore_env_overrides "${PRUNE_ENV_OVERRIDES[@]}"
 
 LOCAL_BACKUP_DIR="${BACKUP_DIR:-$HOME/metrics-backups}"
+LOG_DIR="${LOG_DIR:-$DEPLOY_DIR/logs}"
+LOCAL_BACKUP_LOCK_FILE="${LOCAL_BACKUP_LOCK_FILE:-$LOG_DIR/.local-backup.lock}"
 BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
 R2_LIST_TIMEOUT="${R2_LIST_TIMEOUT:-300}"
@@ -52,14 +54,37 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
         exit 1
     fi
 
-    # Clean stale incomplete local backup staging dirs older than 24 hours
-    while IFS= read -r -d '' stale_tmp; do
-        log "   Removing stale incomplete backup: $(basename "$stale_tmp")"
-        if ! rm -rf -- "$stale_tmp"; then
-            log "❌ Failed to remove stale temp backup: $stale_tmp"
-            exit 1
+    # Clean stale incomplete local backup staging dirs older than 24 hours only when
+    # no local backup holds LOCAL_BACKUP_LOCK_FILE (rclone updates files inside subdirs).
+    run_stale_cleanup=true
+    prune_lock_open=false
+    if command -v flock >/dev/null 2>&1 && [[ -f "$LOCAL_BACKUP_LOCK_FILE" ]]; then
+        exec 7>"$LOCAL_BACKUP_LOCK_FILE"
+        prune_lock_open=true
+        if ! flock -n 7; then
+            exec 7>&-
+            prune_lock_open=false
+            run_stale_cleanup=false
+            log "⏭️ Skipping stale temp cleanup (local backup lock is held)"
         fi
-    done < <(find "$LOCAL_BACKUP_DIR" -maxdepth 1 -type d -name 'backup-*.tmp.*' -mmin +1440 -print0 2>/dev/null)
+    fi
+
+    if [[ "$run_stale_cleanup" == "true" ]]; then
+        while IFS= read -r -d '' stale_tmp; do
+            log "   Removing stale incomplete backup: $(basename "$stale_tmp")"
+            if ! rm -rf -- "$stale_tmp"; then
+                if [[ "$prune_lock_open" == "true" ]]; then
+                    exec 7>&-
+                fi
+                log "❌ Failed to remove stale temp backup: $stale_tmp"
+                exit 1
+            fi
+        done < <(find "$LOCAL_BACKUP_DIR" -maxdepth 1 -type d -name 'backup-*.tmp.*' -mmin +1440 -print0 2>/dev/null)
+    fi
+
+    if [[ "$prune_lock_open" == "true" ]]; then
+        exec 7>&-
+    fi
 
     shopt -s nullglob
     local_backups=()

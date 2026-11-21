@@ -360,6 +360,48 @@ test_local_keep_backups_and_tmp_handling() {
     pass "LOCAL_KEEP_BACKUPS works independently, ignores active .tmp.*, cleans stale .tmp.*, and validates integers"
 }
 
+test_stale_tmp_cleanup_skips_when_backup_lock_held() {
+    if ! command -v flock >/dev/null 2>&1; then
+        pass "lock-held stale temp test skipped (flock unavailable)"
+        return
+    fi
+
+    local backup_dir rclone_dir purge_log lock_file stale_dir output lock_pid
+    backup_dir="$TMP_DIR/lock-held-tmp"
+    rclone_dir="$TMP_DIR/rclone bin lock held"
+    purge_log="$TMP_DIR/lock-held-purge.log"
+    lock_file="$TMP_DIR/local-backup.lock"
+    stale_dir="$backup_dir/backup-2026-01-01_000000.tmp.777"
+    mkdir -p "$stale_dir"
+    touch -t "202601010000" "$stale_dir"
+    make_rclone_stub "$rclone_dir"
+
+    (
+        exec 9>"$lock_file"
+        flock 9
+        sleep 2
+    ) &
+    lock_pid=$!
+    sleep 0.2
+
+    output=$(LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "")
+    [[ -d "$stale_dir" ]] || {
+        kill "$lock_pid" 2>/dev/null || true
+        wait "$lock_pid" 2>/dev/null || true
+        fail "stale temp dir was removed while LOCAL_BACKUP_LOCK_FILE was held"
+    }
+    grep -q "Skipping stale temp cleanup (local backup lock is held)" <<< "$output" || {
+        kill "$lock_pid" 2>/dev/null || true
+        wait "$lock_pid" 2>/dev/null || true
+        fail "lock-held skip message missing: $output"
+    }
+    wait "$lock_pid" || true
+
+    LOCAL_BACKUP_LOCK_FILE="$lock_file" run_prune "$backup_dir" "$rclone_dir/rclone" "$purge_log" "" >/dev/null
+    [[ ! -e "$stale_dir" ]] || fail "stale temp dir was not removed after LOCAL_BACKUP_LOCK_FILE was released"
+    pass "stale temp cleanup skips while LOCAL_BACKUP_LOCK_FILE is held and runs once released"
+}
+
 test_empty_backup_sets_skip_cleanly
 test_environment_overrides_config_env
 test_multiple_backups_prune_oldest
@@ -372,3 +414,4 @@ test_r2_purge_failure_is_reported
 test_local_enumeration_failure_is_reported
 test_local_permission_failure_is_reported
 test_local_keep_backups_and_tmp_handling
+test_stale_tmp_cleanup_skips_when_backup_lock_held

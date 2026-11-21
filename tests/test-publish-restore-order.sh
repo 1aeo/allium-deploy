@@ -56,6 +56,9 @@ printf '%s start\\n' "$name" >> "\$TEST_EVENTS"
 sleep "\${$sleep_var:-0}"
 printf '%s end\\n' "$name" >> "\$TEST_EVENTS"
 [[ "\${$exit_var:-0}" != kill ]] || kill -KILL \$\$
+if [[ "$name" == r2 && -n "\${ALLIUM_LOCAL_BACKUP_RESULT_FILE:-}" && -n "\${R2_STUB_BACKUP_RESULT:-}" ]]; then
+    printf '%s\\n' "\$R2_STUB_BACKUP_RESULT" > "\$ALLIUM_LOCAL_BACKUP_RESULT_FILE"
+fi
 exit "\${$exit_var:-0}"
 STUB
     chmod +x "$STUB_DIR/$file"
@@ -161,7 +164,7 @@ run_publish() {
     local assignment
     export CF_SLEEP="$1" DO_SLEEP="$2" R2_SLEEP="$3"
     shift 3
-    export CF_STUB_EXIT=0 DO_STUB_EXIT=0 R2_STUB_EXIT=0 PROMOTE_STUB_EXIT=0 MKTEMP_MODE=""
+    export CF_STUB_EXIT=0 DO_STUB_EXIT=0 R2_STUB_EXIT=0 R2_STUB_BACKUP_RESULT="" PROMOTE_STUB_EXIT=0 MKTEMP_MODE=""
     export CHARTS_SLEEP=0 CHARTS_STUB_EXIT=0 CHARTS_PROMOTE_STUB_EXIT=0 ROUTE_STUB_EXIT=0 REDIRECTS_STUB_EXIT=0
     R2_ENABLED=true
     DO_ENABLED=true
@@ -582,18 +585,36 @@ test_do_skips_local_backup_only_when_r2_enabled() {
     local args_log="$TMP_DIR/publisher-args.log"
     export TEST_ARGS_LOG="$args_log"
 
+    # R2 completes today's local backup -> DO runs only with --skip-local-backup (no fallback)
     : > "$args_log"
-    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_BACKUP_RESULT=created
     grep -qxF "do --skip-local-backup $OUTPUT_DIR" "$args_log" || \
         fail "DO was not called with --skip-local-backup when R2_ENABLED=true: $(cat "$args_log")"
+    ! grep -qF -- '--local-backup-only' "$args_log" || \
+        fail "DO unexpectedly ran --local-backup-only when R2 created local backup: $(cat "$args_log")"
 
+    # R2 fails local backup (even while exiting 0 for live sync) -> DO falls back with --local-backup-only
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_BACKUP_RESULT=failed
+    grep -qxF "do --skip-local-backup $OUTPUT_DIR" "$args_log" || \
+        fail "DO initial call missing --skip-local-backup: $(cat "$args_log")"
+    grep -qxF "do --local-backup-only $OUTPUT_DIR" "$args_log" || \
+        fail "DO fallback --local-backup-only did not run when R2 reported failed: $(cat "$args_log")"
+
+    # R2 exits non-zero -> DO falls back with --local-backup-only
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true R2_STUB_EXIT=4
+    grep -qxF "do --local-backup-only $OUTPUT_DIR" "$args_log" || \
+        fail "DO fallback --local-backup-only did not run when R2 exited 4: $(cat "$args_log")"
+
+    # R2 disabled -> DO takes local backup directly without --skip-local-backup
     : > "$args_log"
     run_publish 0 1 1 R2_ENABLED=false DO_ENABLED=true
     grep -qxF "do $OUTPUT_DIR" "$args_log" || \
         fail "DO should take local backup without --skip-local-backup when R2_ENABLED=false: $(cat "$args_log")"
 
     unset TEST_ARGS_LOG
-    pass "DO skips local backup only when R2 is also enabled"
+    pass "DO skips duplicate local backup when R2 completes it and falls back when R2 fails or is disabled"
 }
 
 test_worker_promoted_before_storage_finishes

@@ -47,6 +47,7 @@ printf '%s\n' \
     'set -euo pipefail' \
     'printf "%s\n" "$*" >> "$MOCK_RCLONE_CALLS"' \
     'if [[ -n "${MOCK_FAIL_BACKUPS:-}" && "${1:-}" == sync && ( "${3:-}" == */backups/backup-* || "${3:-}" == *:test-bucket/_backups/* ) ]]; then echo "mock backup failure" >&2; exit 7; fi' \
+    'if [[ -n "${MOCK_RCLONE_STDERR:-}" && "${1:-}" == sync ]]; then echo "$MOCK_RCLONE_STDERR" >&2; fi' \
     'case "${1:-}" in' \
     '  listremotes) printf "r2-metrics:\nspaces-metrics:\n" ;;' \
     'esac' \
@@ -411,9 +412,10 @@ expect_backups 1 1 "DO --skip-local-backup with --force-backup"
 pass "--skip-local-backup skips DO local backup unless --force-backup is given"
 
 clear_markers
-run allium-deploy-upload-do.sh MOCK_FLOCK_NONBLOCK_EXIT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
+run allium-deploy-upload-do.sh MOCK_FLOCK_NONBLOCK_EXIT=1 MOCK_RCLONE_STDERR=stderr-after-lock-visible LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
 expect_backups 0 0 "DO local backup flock contention"
 expect_log 'another local backup is already in progress' "lock contention was not logged"
+expect_log 'stderr-after-lock-visible' "releasing flock silenced shell stderr"
 [[ ! -e "$DO_LOCAL_MARKER" ]] || fail "flock contention wrote local backup marker"
-pass "non-blocking flock contention skips duplicate local backup"
+pass "non-blocking flock contention skips duplicate local backup and preserves shell stderr"
 

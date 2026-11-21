@@ -23,7 +23,7 @@ cleanup_local_backup_staging() {
     fi
     _LOCAL_BACKUP_STAGING=""
     if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
-        exec 7>&- 2>/dev/null || true
+        exec 7>&-
         _LOCAL_BACKUP_LOCK_OPEN=false
     fi
 }
@@ -230,7 +230,7 @@ write_marker_atomically() {
 
 _release_local_backup_lock() {
     if [[ "${_LOCAL_BACKUP_LOCK_OPEN:-false}" == "true" ]]; then
-        exec 7>&- 2>/dev/null || true
+        exec 7>&-
         _LOCAL_BACKUP_LOCK_OPEN=false
     fi
 }
@@ -242,17 +242,21 @@ create_local_backup() {
     local frequency="${4:-daily}"
     local rclone_opts staging_dir final_dir
     local status=0
+    _LOCAL_BACKUP_OUTCOME="failed"
     rclone_opts=$(build_rclone_opts root)
 
     if [[ "${SKIP_LOCAL_BACKUP:-false}" == "true" && "$force_flag" != "true" ]]; then
+        _LOCAL_BACKUP_OUTCOME="skipped_disabled"
         log "⏭️  Skipping local backup (handled by primary storage backend)"
         return 1
     fi
 
     if ! backup_needed "$marker_file" "$frequency" "$force_flag"; then
         if [[ "$frequency" == "off" ]]; then
+            _LOCAL_BACKUP_OUTCOME="skipped_off"
             log "⏭️  Skipping local backup (frequency is off)"
         else
+            _LOCAL_BACKUP_OUTCOME="already_done"
             log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
         fi
         return 1
@@ -264,13 +268,20 @@ create_local_backup() {
         _LOCAL_BACKUP_LOCK_OPEN=true
         if ! flock -n 7; then
             _release_local_backup_lock
+            _LOCAL_BACKUP_OUTCOME="locked"
             log "⏭️  Skipping local backup (another local backup is already in progress)"
             return 1
         fi
         # Re-check after acquiring lock in case a concurrent process just completed.
         if ! backup_needed "$marker_file" "$frequency" "$force_flag"; then
             _release_local_backup_lock
-            log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
+            if [[ "$frequency" == "off" ]]; then
+                _LOCAL_BACKUP_OUTCOME="skipped_off"
+                log "⏭️  Skipping local backup (frequency is off)"
+            else
+                _LOCAL_BACKUP_OUTCOME="already_done"
+                log "⏭️  Skipping local backup (already done today: $(cat "$marker_file"))"
+            fi
             return 1
         fi
     fi
@@ -293,6 +304,7 @@ create_local_backup() {
         rm -rf -- "$staging_dir"
         _LOCAL_BACKUP_STAGING=""
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         log "   ❌ Local backup failed (rclone exit $status); today's backup is not marked done"
         return "$status"
     fi
@@ -301,6 +313,7 @@ create_local_backup() {
         rm -rf -- "$staging_dir"
         _LOCAL_BACKUP_STAGING=""
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         log "   ❌ Failed to finalize local backup directory: $final_dir"
         return 1
     fi
@@ -308,9 +321,11 @@ create_local_backup() {
 
     if ! write_marker_atomically "$marker_file" "$TODAY"; then
         _release_local_backup_lock
+        _LOCAL_BACKUP_OUTCOME="failed"
         return 1
     fi
     _release_local_backup_lock
+    _LOCAL_BACKUP_OUTCOME="created"
     log "   ✅ Local backup created"
     return 0
 }

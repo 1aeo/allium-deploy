@@ -15,6 +15,7 @@ ACTION=""
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
 REMOTE_BACKUP_ONLY=false
+LOCAL_BACKUP_ONLY=false
 CLI_SKIP_LOCAL_BACKUP=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,6 +29,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --remote-backup-only)
             REMOTE_BACKUP_ONLY=true
+            shift
+            ;;
+        --local-backup-only)
+            LOCAL_BACKUP_ONLY=true
             shift
             ;;
         --skip-local-backup)
@@ -66,6 +71,10 @@ DO snapshot only (used by scripts/run-do-remote-backup.sh):
   $0 --remote-backup-only --force-backup
                    Take a DO snapshot now, even if done today or
                    DO_BACKUP_FREQUENCY is off
+
+DO local backup only (used as fallback when primary local backup fails/skips):
+  $0 --local-backup-only [source_dir]
+                   Take today's local backup from DO Spaces only, without remote backup or live sync
 
 With DO_REMOTE_BACKUP_INLINE=false, --force-backup [source_dir] forces only
 the local backup; use --remote-backup-only --force-backup for the DO snapshot.
@@ -378,6 +387,12 @@ if [[ "$DO_USE_CDN" == "true" ]]; then
     log "   Mode: CDN (faster, may cache up to 1hr)"
 else
     log "   Mode: Origin (always fresh)"
+fi
+
+if [[ "$LOCAL_BACKUP_ONLY" == "true" ]]; then
+    create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
+    print_sync_summary
+    exit 0
 fi
 
 create_local_backup "$BUCKET" "$LOCAL_BACKUP_MARKER" "$FORCE_BACKUP" "$LOCAL_BACKUP_FREQUENCY" || true
