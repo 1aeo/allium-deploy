@@ -11,7 +11,7 @@ DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=./scripts/allium-deploy-lib.sh
 source "$SCRIPT_DIR/allium-deploy-lib.sh"
 
-PRUNE_ENV_OVERRIDES=(BACKUP_DIR R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS)
+PRUNE_ENV_OVERRIDES=(BACKUP_DIR R2_BUCKET RCLONE_PATH R2_LIST_TIMEOUT KEEP_BACKUPS LOCAL_KEEP_BACKUPS)
 capture_env_overrides "${PRUNE_ENV_OVERRIDES[@]}"
 
 if [[ -f "$DEPLOY_DIR/config.env" ]]; then
@@ -25,6 +25,7 @@ BUCKET="r2-metrics:${R2_BUCKET:?R2_BUCKET must be set in config.env}"
 RCLONE="${RCLONE_PATH:-$HOME/bin/rclone}"
 R2_LIST_TIMEOUT="${R2_LIST_TIMEOUT:-300}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
+LOCAL_KEEP_BACKUPS="${LOCAL_KEEP_BACKUPS:-$KEEP_BACKUPS}"
 SAFETY_BUFFER=2
 
 log() {
@@ -32,6 +33,15 @@ log() {
 }
 
 count_lines() { local c; c=$(grep -c . <<< "$1" 2>/dev/null) || c=0; echo "$c"; }
+
+if [[ ! "$KEEP_BACKUPS" =~ ^[1-9][0-9]*$ ]]; then
+    log "❌ Invalid KEEP_BACKUPS=$KEEP_BACKUPS (must be a positive integer)"
+    exit 2
+fi
+if [[ ! "$LOCAL_KEEP_BACKUPS" =~ ^[1-9][0-9]*$ ]]; then
+    log "❌ Invalid LOCAL_KEEP_BACKUPS=$LOCAL_KEEP_BACKUPS (must be a positive integer)"
+    exit 2
+fi
 
 log "🧹 Prune starting..."
 
@@ -42,8 +52,21 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
         exit 1
     fi
 
+    # Clean stale incomplete local backup staging dirs older than 24 hours
+    while IFS= read -r -d '' stale_tmp; do
+        log "   Removing stale incomplete backup: $(basename "$stale_tmp")"
+        if ! rm -rf -- "$stale_tmp"; then
+            log "❌ Failed to remove stale temp backup: $stale_tmp"
+            exit 1
+        fi
+    done < <(find "$LOCAL_BACKUP_DIR" -maxdepth 1 -type d -name 'backup-*.tmp.*' -mmin +1440 -print0 2>/dev/null)
+
     shopt -s nullglob
-    local_backups=("$LOCAL_BACKUP_DIR"/backup-*)
+    local_backups=()
+    for candidate in "$LOCAL_BACKUP_DIR"/backup-*; do
+        [[ "$(basename "$candidate")" == *.tmp.* ]] && continue
+        local_backups+=("$candidate")
+    done
     shopt -u nullglob
     local_all=""
     if (( ${#local_backups[@]} > 0 )); then
@@ -53,9 +76,9 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
         fi
     fi
     local_count=$(count_lines "$local_all")
-    if [[ "$local_count" -gt "$((KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
-        log "🧹 Pruning local backups ($local_count found, keeping $KEEP_BACKUPS)..."
-        local_to_delete=$(printf '%s\n' "$local_all" | tail -n +$((KEEP_BACKUPS + 1)))
+    if [[ "$local_count" -gt "$((LOCAL_KEEP_BACKUPS + SAFETY_BUFFER))" ]]; then
+        log "🧹 Pruning local backups ($local_count found, keeping $LOCAL_KEEP_BACKUPS)..."
+        local_to_delete=$(printf '%s\n' "$local_all" | tail -n +$((LOCAL_KEEP_BACKUPS + 1)))
         while IFS= read -r backup_path; do
             [[ -z "$backup_path" ]] && continue
             if ! rm -rf -- "$backup_path"; then
@@ -65,7 +88,7 @@ if [[ -d "$LOCAL_BACKUP_DIR" ]]; then
         done <<< "$local_to_delete"
         log "✅ Local prune done"
     else
-        log "⏭️ Local prune skipped ($local_count backups, need $((KEEP_BACKUPS + SAFETY_BUFFER + 1))+ to prune)"
+        log "⏭️ Local prune skipped ($local_count backups, need $((LOCAL_KEEP_BACKUPS + SAFETY_BUFFER + 1))+ to prune)"
     fi
 fi
 

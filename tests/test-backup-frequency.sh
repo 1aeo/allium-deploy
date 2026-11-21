@@ -58,6 +58,7 @@ chmod 0755 "$MOCK_BIN/rclone"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
     'printf "%s\n" "$*" >> "$MOCK_FLOCK_CALLS"' \
+    'if [[ "${1:-}" == "-n" ]]; then exit "${MOCK_FLOCK_NONBLOCK_EXIT:-0}"; fi' \
     > "$MOCK_BIN/flock"
 chmod 0755 "$MOCK_BIN/flock"
 
@@ -372,18 +373,47 @@ pass "hourly runner fails closed on an invalid value"
 
 # A backup whose sync fails is not marked done, so a later run retries it
 # instead of skipping today's backup.
-rm -f "$R2_LOCAL_MARKER" "$R2_MARKER"
+rm -rf "$R2_LOCAL_MARKER" "$R2_MARKER" "$TMP_DIR/backups"/backup-*
 run allium-deploy-upload-r2.sh MOCK_FAIL_BACKUPS=1 LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=daily
 [[ "$RUN_STATUS" == 0 ]] || fail "R2 run with failing backups exited $RUN_STATUS"
 [[ ! -e "$R2_LOCAL_MARKER" && ! -e "$R2_MARKER" ]] || fail "a failed backup sync wrote its marker"
+[[ -z "$(ls -A "$TMP_DIR/backups")" ]] || fail "a failed local backup left staging files behind"
 expect_log "Local backup failed (rclone exit 7); today's backup is not marked done" "failed local backup was not reported"
 expect_log "Remote backup failed (rclone exit 7); today's backup is not marked done" "failed remote backup was not reported"
 expect_no_log 'Remote backup created' "a failed remote backup was reported as created"
-pass "a backup whose sync fails writes no marker and the live sync still runs"
+pass "a backup whose sync fails writes no marker, cleans staging dir, and the live sync still runs"
 
 printf 'yesterday\n' > "$DO_MARKER"
 run allium-deploy-upload-do.sh MOCK_FAIL_BACKUPS=1 DO_BACKUP_FREQUENCY=daily -- --remote-backup-only
 [[ "$RUN_STATUS" == 7 ]] || fail "failed remote-backup-only exited $RUN_STATUS instead of rclone's 7"
 [[ "$(cat "$DO_MARKER")" == yesterday ]] || fail "failed remote-backup-only marked today's backup done"
 pass "a failed DO snapshot exits with rclone's status and leaves the marker for the hourly retry"
+
+# --- Shared local backup marker, --skip-local-backup, and lock contention ---
+
+rm -f "$R2_LOCAL_MARKER" "$R2_MARKER" "$DO_LOCAL_MARKER" "$DO_MARKER"
+# Without DO_LOCAL_BACKUP_MARKER, R2 and DO share last-local-backup-date.
+run allium-deploy-upload-r2.sh DO_LOCAL_BACKUP_MARKER= LOCAL_BACKUP_FREQUENCY=daily R2_BACKUP_FREQUENCY=off
+expect_backups 1 0 "R2 shared local backup"
+run allium-deploy-upload-do.sh DO_LOCAL_BACKUP_MARKER= LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
+expect_backups 0 0 "DO skips after shared R2 local backup"
+pass "R2 and DO share last-local-backup-date by default"
+
+clear_markers
+run allium-deploy-upload-do.sh LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=daily -- --skip-local-backup "$OUT"
+expect_backups 0 1 "DO --skip-local-backup"
+expect_log 'Skipping local backup (handled by primary storage backend)' "skip local backup was not logged"
+run allium-deploy-upload-do.sh ALLIUM_SKIP_LOCAL_BACKUP=true LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
+expect_backups 0 0 "DO ALLIUM_SKIP_LOCAL_BACKUP=true"
+clear_markers
+run allium-deploy-upload-do.sh LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off -- --skip-local-backup --force-backup "$OUT"
+expect_backups 1 1 "DO --skip-local-backup with --force-backup"
+pass "--skip-local-backup skips DO local backup unless --force-backup is given"
+
+clear_markers
+run allium-deploy-upload-do.sh MOCK_FLOCK_NONBLOCK_EXIT=1 LOCAL_BACKUP_FREQUENCY=daily DO_BACKUP_FREQUENCY=off
+expect_backups 0 0 "DO local backup flock contention"
+expect_log 'another local backup is already in progress' "lock contention was not logged"
+[[ ! -e "$DO_LOCAL_MARKER" ]] || fail "flock contention wrote local backup marker"
+pass "non-blocking flock contention skips duplicate local backup"
 

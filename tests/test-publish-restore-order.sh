@@ -49,6 +49,9 @@ write_publisher() {
     local file="$1" name="$2" sleep_var="$3" exit_var="$4"
     cat > "$STUB_DIR/$file" <<STUB
 #!/usr/bin/env bash
+if [[ -n "\${TEST_ARGS_LOG:-}" ]]; then
+    printf '%s %s\\n' "$name" "\$*" >> "\$TEST_ARGS_LOG"
+fi
 printf '%s start\\n' "$name" >> "\$TEST_EVENTS"
 sleep "\${$sleep_var:-0}"
 printf '%s end\\n' "$name" >> "\$TEST_EVENTS"
@@ -575,6 +578,24 @@ test_call_placement() {
     pass "the job publishes through publish_in_restore_order before deciding its exit"
 }
 
+test_do_skips_local_backup_only_when_r2_enabled() {
+    local args_log="$TMP_DIR/publisher-args.log"
+    export TEST_ARGS_LOG="$args_log"
+
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=true DO_ENABLED=true
+    grep -qxF "do --skip-local-backup $OUTPUT_DIR" "$args_log" || \
+        fail "DO was not called with --skip-local-backup when R2_ENABLED=true: $(cat "$args_log")"
+
+    : > "$args_log"
+    run_publish 0 1 1 R2_ENABLED=false DO_ENABLED=true
+    grep -qxF "do $OUTPUT_DIR" "$args_log" || \
+        fail "DO should take local backup without --skip-local-backup when R2_ENABLED=false: $(cat "$args_log")"
+
+    unset TEST_ARGS_LOG
+    pass "DO skips local backup only when R2 is also enabled"
+}
+
 test_worker_promoted_before_storage_finishes
 test_slow_worker_unchanged
 test_failures_keep_exit_inputs
@@ -586,3 +607,4 @@ test_layout_marker_and_classes
 test_live_charts_list
 test_charts_timing_and_warning_pings
 test_call_placement
+test_do_skips_local_backup_only_when_r2_enabled

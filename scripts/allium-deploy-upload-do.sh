@@ -11,17 +11,84 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/allium-deploy-upload-common.sh"
 
 # Parse arguments
+ACTION=""
 SOURCE_DIR_ARG=""
 FORCE_BACKUP=false
 REMOTE_BACKUP_ONLY=false
-case "${1:-}" in
-    --force-backup) SOURCE_DIR_ARG="${2:-}" ;;
-    --list-backups|--remote-backup-only|--help|-h) ;;
-    *) SOURCE_DIR_ARG="${1:-}" ;;
-esac
+CLI_SKIP_LOCAL_BACKUP=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list-backups)
+            ACTION="list"
+            shift
+            ;;
+        --force-backup)
+            FORCE_BACKUP=true
+            shift
+            ;;
+        --remote-backup-only)
+            REMOTE_BACKUP_ONLY=true
+            shift
+            ;;
+        --skip-local-backup)
+            CLI_SKIP_LOCAL_BACKUP=true
+            shift
+            ;;
+        --help|-h)
+            ACTION="help"
+            shift
+            ;;
+        --)
+            shift
+            if [[ $# -gt 0 ]]; then
+                SOURCE_DIR_ARG="$1"
+                shift
+            fi
+            break
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            SOURCE_DIR_ARG="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ "$ACTION" == "help" ]]; then
+    print_help "$0" "DO Spaces"
+    cat <<EOF
+
+DO snapshot only (used by scripts/run-do-remote-backup.sh):
+  $0 --remote-backup-only
+  $0 --remote-backup-only --force-backup
+                   Take a DO snapshot now, even if done today or
+                   DO_BACKUP_FREQUENCY is off
+
+With DO_REMOTE_BACKUP_INLINE=false, --force-backup [source_dir] forces only
+the local backup; use --remote-backup-only --force-backup for the DO snapshot.
+LOCAL_BACKUP_FREQUENCY and DO_BACKUP_FREQUENCY accept daily (the default),
+every-run or off.
+EOF
+    exit 0
+fi
 
 setup_common_vars
+trap cleanup_local_backup_staging EXIT
 STORAGE_NAME="DO-Spaces"
+if [[ "$CLI_SKIP_LOCAL_BACKUP" == "true" ]]; then
+    SKIP_LOCAL_BACKUP=true
+elif [[ -n "${ALLIUM_SKIP_LOCAL_BACKUP:-}" ]]; then
+    case "$ALLIUM_SKIP_LOCAL_BACKUP" in
+        true|false) SKIP_LOCAL_BACKUP="$ALLIUM_SKIP_LOCAL_BACKUP" ;;
+        *)
+            echo "❌ Error: ALLIUM_SKIP_LOCAL_BACKUP must be true or false (got: $ALLIUM_SKIP_LOCAL_BACKUP)" >&2
+            exit 2
+            ;;
+    esac
+fi
 
 # Override parallelism for DO Spaces (lower to avoid 503 rate limiting)
 TRANSFERS="${DO_RCLONE_TRANSFERS:-56}"
@@ -66,7 +133,7 @@ DO_BUCKET_NAME="${DO_SPACES_BUCKET:?DO_SPACES_BUCKET must be set in config.env}"
 BUCKET="spaces-metrics:${DO_BUCKET_NAME}"
 DO_USE_CDN="${DO_SPACES_CDN:-false}"
 
-LOCAL_BACKUP_MARKER="${DO_LOCAL_BACKUP_MARKER:-$LOG_DIR/last-do-local-backup-date}"
+LOCAL_BACKUP_MARKER="${DO_LOCAL_BACKUP_MARKER:-${LOCAL_BACKUP_MARKER:-$LOG_DIR/last-local-backup-date}}"
 DO_BACKUP_MARKER="${DO_REMOTE_BACKUP_MARKER:-$LOG_DIR/last-do-backup-date}"
 DO_REMOTE_BACKUP_INLINE="${DO_REMOTE_BACKUP_INLINE:-true}"
 DO_IO_LOCK_FILE="${DO_IO_LOCK_FILE:-/tmp/allium-do-spaces-io.lock}"
@@ -242,45 +309,12 @@ ensure_spaces_remote() {
     fi
 }
 
-# Handle arguments
-case "${1:-}" in
-    --list-backups)
-        ensure_spaces_remote
-        list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
-        exit 0
-        ;;
-    --force-backup)
-        # SOURCE_DIR_ARG was parsed above. Calling setup_common_vars again here
-        # would reset the DO transfer, checker and transaction-rate caps.
-        FORCE_BACKUP=true
-        ;;
-    --remote-backup-only)
-        REMOTE_BACKUP_ONLY=true
-        # A manual `--remote-backup-only --force-backup` takes a DO snapshot
-        # even if one exists today or DO_BACKUP_FREQUENCY=off. The hourly
-        # runner never passes it.
-        if [[ "${2:-}" == "--force-backup" ]]; then
-            FORCE_BACKUP=true
-        fi
-        ;;
-    --help|-h)
-        print_help "$0" "DO Spaces"
-        cat <<EOF
-
-DO snapshot only (used by scripts/run-do-remote-backup.sh):
-  $0 --remote-backup-only
-  $0 --remote-backup-only --force-backup
-                   Take a DO snapshot now, even if done today or
-                   DO_BACKUP_FREQUENCY is off
-
-With DO_REMOTE_BACKUP_INLINE=false, --force-backup [source_dir] forces only
-the local backup; use --remote-backup-only --force-backup for the DO snapshot.
-LOCAL_BACKUP_FREQUENCY and DO_BACKUP_FREQUENCY accept daily (the default),
-every-run or off.
-EOF
-        exit 0
-        ;;
-esac
+# Handle list action
+if [[ "$ACTION" == "list" ]]; then
+    ensure_spaces_remote
+    list_backups "$BUCKET" "$LOCAL_BACKUP_MARKER" "$DO_BACKUP_MARKER" "DO Spaces"
+    exit 0
+fi
 
 [[ ! -d "$SOURCE_DIR" ]] && { echo "❌ Error: Source directory not found: $SOURCE_DIR"; exit 1; }
 

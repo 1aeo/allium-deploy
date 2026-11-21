@@ -863,7 +863,11 @@ publish_in_restore_order() {
 
     if [[ "$DO_ENABLED" == "true" ]]; then
         log "🚀 Starting DO Spaces upload..."
-        start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
+        if [[ "$R2_ENABLED" == "true" ]]; then
+            start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" --skip-local-backup "$OUTPUT_DIR"
+        else
+            start_publisher do-spaces stdbuf -oL "$SCRIPT_DIR/allium-deploy-upload-do.sh" "$OUTPUT_DIR"
+        fi
         do_pid=$!
     fi
 
