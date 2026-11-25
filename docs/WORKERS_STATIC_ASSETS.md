@@ -89,7 +89,11 @@ To stay well below the `100000`-asset per-version limit, `CHARTS_LAYOUT=charts` 
 
 ### Roll Back Worker Version
 
-Freeze promotions (`CF_ASSETS_ALLOW_PROMOTION=false`), pick a known-good UUID from `logs/cfassets-promotion-summary.tsv`, and deploy it:
+Freeze promotions (`CF_ASSETS_ALLOW_PROMOTION=false`), pick a known-good UUID from `logs/cfassets-promotion-summary.tsv`, and check layout compatibility before deploying:
+
+- **Main Worker only (`CHARTS_LAYOUT=charts` caveat):** Deploying an older main Worker UUID restores only the main Worker; it does **not** restore charts from older builds. This caveat applies only to `CHARTS_LAYOUT=charts` versions (`CHARTS_LAYOUT=beside` versions bundle their charts inline). Because `logs/cfcharts-live-charts` retains only the charts linked by the currently promoted main Worker version, later promotions can drop chart filenames needed by older `charts`-layout versions, leaving broken `/charts/...` links.
+- **Pre-deploy check:** Confirm the chosen main Worker UUID's linked charts are still present on the active charts Worker (via preview URL or `logs/cfcharts-live-charts`) before rolling back.
+- **If those charts are unavailable:** Also deploy a matching charts Worker version from `logs/cfcharts-promotion-summary.tsv` (`pnpm exec wrangler versions deploy <CHARTS_VERSION_ID>@100% --yes --config wrangler.charts.toml` while retained), restore a matching backup snapshot and re-publish both Workers, or roll back to Cloudflare Pages; otherwise a main-Worker-only rollback is incomplete.
 
 ```bash
 pnpm exec wrangler versions deploy <VERSION_ID>@100% --yes --config wrangler.assets.toml

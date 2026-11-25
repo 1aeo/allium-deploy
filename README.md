@@ -152,8 +152,10 @@ When both `R2_ENABLED=true` and `DO_ENABLED=true` in `allium-deploy-update.sh`, 
 ./scripts/allium-deploy-upload-r2.sh ~/metrics-backups/backup-2025-12-01_063000
 ./scripts/allium-deploy-upload-do.sh ~/metrics-backups/backup-2025-12-01_063000
 
-# Restore a remote snapshot to OUTPUT_DIR, then re-publish
+# Restore ONE remote snapshot to OUTPUT_DIR, then re-publish. Run only one command:
+# Option A: Restore from R2 snapshot
 ~/bin/rclone sync r2-metrics:<bucket>/_backups/2025-12-01_063000 ~/metrics-output
+# Option B: Restore from DO Spaces snapshot
 ~/bin/rclone sync spaces-metrics:<bucket>/_backups/2025-12-01_063000 ~/metrics-output
 ```
 
