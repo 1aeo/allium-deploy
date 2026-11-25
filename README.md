@@ -1,19 +1,44 @@
-# Allium Metrics - Deployment Template
+# Allium Metrics — Deployment
 
-Automated Tor relay metrics generation and deployment to Cloudflare Pages with multi-storage support.
+Automated Tor relay metrics generation and deployment for [1aeo/allium](https://github.com/1aeo/allium).
 
-**Live example:** https://metrics.1aeo.com  
-**Allium source:** https://github.com/1aeo/allium
+**Live site:** https://metrics.1aeo.com  
+**Workers Static Assets guide:** [docs/WORKERS_STATIC_ASSETS.md](docs/WORKERS_STATIC_ASSETS.md)
 
 ---
 
-## Storage Options
+## Architecture & Current Production Path
 
-| Provider | Best For |
-|----------|----------|
-| **Cloudflare R2** | Native integration, zero egress |
-| **DigitalOcean Spaces** | Simple flat pricing |
-| **Both** | Redundancy with failover |
+Production traffic (`metrics.1aeo.com/*`) is served by **Cloudflare Workers Static Assets** (`workers/search.js` with the `ALLIUM_ASSETS` binding). When `CHARTS_LAYOUT=charts` is enabled, a second assets-only charts Worker serves `<host>/charts/*` while the main Worker serves pages and redirects legacy chart URLs.
+
+Each scheduled build ([`scripts/allium-deploy-update.sh`](scripts/allium-deploy-update.sh)) runs guarded pulls, syncs the pinned Workers toolchain, generates the site with Allium, validates search and discovery artifacts, starts all enabled publishers in parallel, and acts on them in restore-priority order:
+
+1. **Cloudflare Workers Static Assets** (`allium-deploy-cfassets.sh`, plus `allium-deploy-cfcharts.sh` when `CHARTS_LAYOUT=charts`): uploads immutable version(s), verifies preview URLs, and promotes to `100%` without waiting on storage mirrors.
+2. **DigitalOcean Spaces** (`allium-deploy-upload-do.sh`): every-build hot mirror.
+3. **Cloudflare R2** (`allium-deploy-upload-r2.sh`): daily live-content replication (`R2_CONTENT_SYNC_INTERVAL=daily`, verified by object count, total bytes, and representative SHA-256 hashes).
+4. **Cloudflare Pages** (`functions/[[path]].js`, `functions/search.js`, `functions/_shared.js`): maintained behind `PAGES_PURGE_URL` as a route-removal rollback target reading backends in `STORAGE_ORDER`.
+
+```
+┌──────────────────────────────────┐
+│  Allium Generator + Validation   │  ~/allium → ~/metrics-output
+└─────────────────┬────────────────┘
+                  │ parallel launch; restore-priority gating
+     ┌────────────┼──────────────────────┐
+     ▼            ▼                      ▼
+┌──────────┐ ┌──────────────┐ ┌──────────────────┐
+│ Workers  │ │ DigitalOcean │ │ Cloudflare R2    │
+│ Assets   │ │ Spaces       │ │ (daily live sync)│
+│ (+charts │ │ (every-build)│ │                  │
+│ optional)│ └──────┬───────┘ └────────┬─────────┘
+└────┬─────┘        └────────┬─────────┘
+     │                       ▼ STORAGE_ORDER
+     │              ┌──────────────────┐
+     │              │ Cloudflare Pages │ (route-removal rollback;
+     ▼              │ (warm fallback)  │  purged via PAGES_PURGE_URL)
+metrics.1aeo.com/*  └──────────────────┘
+```
+
+See [docs/WORKERS_STATIC_ASSETS.md](docs/WORKERS_STATIC_ASSETS.md) for promotion safety, `CHARTS_LAYOUT=charts`, verification gates, bounded TSV logs, and Pages rollback steps.
 
 ---
 
@@ -24,607 +49,16 @@ Automated Tor relay metrics generation and deployment to Cloudflare Pages with m
 git clone https://github.com/1aeo/allium-deploy.git ~/allium-deploy
 cd ~/allium-deploy
 
-# 2. Configure
+# 2. Configure settings and Cloudflare API tokens
 cp config.env.example config.env
-nano config.env  # Edit values (see below)
+nano config.env
+# Save Cloudflare API token(s) in ~/.config/cloudflare/workers_api_token and/or api_token (chmod 600)
 
-# 3. Install
+# 3. Install dependencies (python3-jinja2, pinned Workers toolchain, rclone, allium, allium.cron)
 ./scripts/allium-deploy-install.sh
 
-# 4. Install cron (uses /etc/cron.d/ drop-in for isolation)
+# 4. Install cron drop-in (defaults to 15,45 * * * * in config.env.example)
 sudo cp ~/allium-deploy/allium.cron /etc/cron.d/allium && sudo chmod 644 /etc/cron.d/allium
-
-# Done! Metrics update every 30 minutes
-```
-
----
-
-## Configuration (config.env)
-
-### Storage Selection
-
-```bash
-# Storage fetch order: comma-separated list of backends to try
-# Options: r2, do, failover
-# Examples:
-#   "r2,do,failover"  - Try R2 first, then DO Spaces, then failover
-#   "do,r2,failover"  - Try DO Spaces first, then R2, then failover
-#   "r2,failover"     - R2 only with failover
-#   "do,failover"     - DO Spaces only with failover
-STORAGE_ORDER=r2,do,failover
-```
-
-### Cloudflare R2 (if using R2)
-
-```bash
-# Cloudflare credentials
-CLOUDFLARE_ACCOUNT_ID=your_account_id
-R2_ENABLED=true
-R2_ACCESS_KEY_ID=your_access_key
-R2_SECRET_ACCESS_KEY=your_secret_key
-R2_BUCKET=my-metrics-content
-```
-
-**Get R2 credentials:**
-1. Account ID: Found in dashboard URL or R2 overview
-2. R2 API Token: R2 → Manage R2 API Tokens → Create token with "Object Read & Write"
-
-### DigitalOcean Spaces (if using DO)
-
-```bash
-DO_ENABLED=true
-DO_SPACES_KEY=your_spaces_key
-DO_SPACES_SECRET=your_spaces_secret
-DO_SPACES_REGION=nyc3
-DO_SPACES_BUCKET=my-metrics-content
-DO_SPACES_URL=https://my-metrics-content.nyc3.digitaloceanspaces.com
-```
-
-**Get DO Spaces credentials:** See [DigitalOcean Spaces Setup](#digitalocean-spaces-setup) below.
-
-### Pages Configuration
-
-```bash
-PAGES_PROJECT_NAME=my-metrics
-SITE_URL=https://metrics.example.com
-```
-
-### Workers Static Assets shadow (Stages 1–2)
-
-The migration plan is tracked in
-[`docs/WORKERS_STATIC_ASSETS_MIGRATION_PLAN.md`](docs/WORKERS_STATIC_ASSETS_MIGRATION_PLAN.md).
-During Stages 1–2, Workers Static Assets receives and verifies an immutable
-candidate after every build, while `metrics.1aeo.com` continues using the
-existing Pages/DO/R2 path.
-
-```bash
-CF_ASSETS_ENABLED=true
-CF_ASSETS_REQUIRED=false
-CF_ASSETS_ALLOW_PROMOTION=false
-CF_ASSETS_WORKER_NAME=1aeo-metrics-assets-stage2
-CF_ASSETS_PREVIEW_ALIAS=allium-stage2
-CF_ASSETS_VERIFY_ATTEMPTS=3
-CF_ASSETS_VERIFY_MAX_ATTEMPTS=12
-CF_ASSETS_VERIFY_RETRY_DELAY=10
-CF_ASSETS_VERIFY_CURL_TIMEOUT=60
-```
-
-Safety properties in shadow mode:
-
-- `wrangler.assets.toml` is generated separately from the Pages configuration.
-- The generated Worker configuration contains no zone route or custom domain.
-- Normal scheduled runs use `wrangler versions upload`; they do not promote a
-  version or change production traffic.
-- `_headers` and `404.html` are installed before any publisher reads the output
-  tree. A root `.assetsignore` or `_redirects`, which this code writes only
-  for `CHARTS_LAYOUT=charts` (see below), is removed at the same point
-  otherwise. `_headers`, `.assetsignore` and `_redirects` are excluded from DO
-  and R2 synchronization.
-- Each upload first counts the files Wrangler would upload. It refuses above
-  `CF_ASSETS_MAX_FILES` (100000, Cloudflare's limit per Worker version) and
-  warns from `CF_ASSETS_WARN_FILES` (98000; 60000 with
-  `CHARTS_LAYOUT=charts`, see below).
-- Candidate root, search index, a nested page, the largest file, a chart PNG
-  (when the tree has one), headers, redirects, static 404, and dynamic search
-  are checked three times.
-- A shadow failure is recorded but remains non-blocking while
-  `CF_ASSETS_REQUIRED=false`.
-
-### Workers Static Assets production promotion (Stage 4)
-
-After the production route and two-hour gate pass, enable automatic promotion
-only with the complete Stage 4 controls:
-
-```bash
-CF_ASSETS_ENABLED=true
-CF_ASSETS_REQUIRED=true
-CF_ASSETS_ALLOW_PROMOTION=true
-PAGES_PURGE_URL=https://1aeo-metrics.pages.dev
-```
-
-Each scheduled job uploads an immutable version, requires the complete preview
-verifier to pass, records that exact version ID, and then runs:
-
-```bash
-wrangler versions deploy VERSION_ID@100% --yes --config wrangler.assets.toml
-```
-
-The Workers upload, the DO Spaces sync and the R2 sync start together. The job
-acts on them in restore-priority order: it promotes the verified Workers
-version as soon as its upload and preview checks finish, without waiting for
-the storage syncs, then waits for DO Spaces and then R2. Each sync's logged
-duration is its own. Promotion does not depend on the storage syncs, and the
-job still waits for all of them before deciding its exit status.
-
-The version file is accepted only when it contains one valid Worker version
-UUID. Missing or malformed state, upload failure, preview-verification failure,
-or Wrangler deployment failure leaves the previous healthy production version
-active and fails the required Workers publication. Attempted promotions append
-one bounded timestamp/version/status row to
-`logs/cfassets-promotion-summary.tsv`; normal request logging remains disabled.
-
-While the Worker route fronts `SITE_URL`, the legacy Pages purge endpoint is
-not reachable through that hostname. `PAGES_PURGE_URL` therefore targets the
-canonical Pages deployment directly, while every purge body uses absolute
-`SITE_URL` cache keys. This keeps Pages usable as a fresh route-removal rollback
-without purging Workers Static Assets or making purge part of Worker version
-activation.
-
-Run `pnpm test` before activation. It includes the Node tests and every shell
-behavior suite, including enabled promotion, failure propagation, and the
-guarantee that an unverified candidate never reaches the promoter. Full
-activation and rollback details are in
-[`docs/WORKERS_STATIC_ASSETS_STAGE4_READINESS.md`](docs/WORKERS_STATIC_ASSETS_STAGE4_READINESS.md).
-
-A brand-new shadow Worker needs one route-free bootstrap deployment before its
-version preview URLs can serve the assets binding. Generate and inspect the
-configuration first, enable Workers Preview URLs for that Worker, and bootstrap
-only the dedicated `*-stage2`/`*-shadow` service on `workers.dev`. Do not attach
-a zone route, custom domain, or production DNS record. The normal scheduled
-path never repeats this bootstrap. Cloudflare otherwise returns error 1042 for
-asset-binding preview requests when the Worker has versions but no deployment
-record.
-
-Deployment evidence is bounded in:
-
-- `logs/cfassets-shadow-summary.tsv`
-- `logs/cfassets-shadow-consecutive-successes`
-- `logs/cfassets-last-version`
-
-These are deployment summaries, not request logs. Stage 3 production routing
-remains disabled until explicit review.
-
-`logs/cfassets-uploads.tsv` adds one row per Wrangler upload: the files the
-version holds, the files Wrangler asked for (its "Found N new or modified
-static assets" line), the files it reported uploaded, the seconds from that
-line to the last upload line, and the seconds of the whole command. The two
-Wrangler counts need `WRANGLER_LOG=info`; `-` marks a hidden value. Wrangler
-keeps already uploaded files per Worker, but only for a bounded volume of
-recent uploads, so these rows show how many files each upload really sends.
-
-### Workers Static Assets chart layout
-
-The relay and contact chart PNGs are most of the output tree's files. With
-`CHARTS_LAYOUT=charts` they move to a second, charts-only Worker, which keeps
-the main Worker's versions well below the per-version file limit. The default,
-`CHARTS_LAYOUT=beside`, changes nothing.
-
-```bash
-CHARTS_LAYOUT=charts
-CF_CHARTS_WORKER_NAME=...        # required; no default
-CF_CHARTS_PREVIEW_ALIAS=allium-charts-candidate
-CF_CHARTS_STAGE_DIR=...          # outside OUTPUT_DIR, on the same filesystem
-```
-
-In that layout `/charts/relay/<fingerprint>/<name>.png` and
-`/charts/contact/<hash>/<name>.png` are the permanent chart URLs. The old ones,
-`/relay/<fingerprint>/<name>.png` and `/contact/<hash>/<name>.png`, answer
-with a 302 to them for as long as the layout is `charts`: crawlers and other
-sites keep requesting them. They stay 302, not 301, while going back to
-`beside` is possible, as browsers keep a 301 with no expiry.
-
-With `CHARTS_LAYOUT=charts`:
-
-- Before Allium runs, the job checks the charts Worker's settings
-  (`scripts/allium-deploy-cfcharts.sh --check-config`) and that Allium has
-  `--chart-layout`. An Allium pulled by that job without it, or whose
-  `allium.py --help` fails, is set back to the previous checkout for the
-  build, logged with the reason and sent to the heartbeat as a warning;
-  otherwise the job stops before anything is generated or published.
-- Allium runs with `--chart-layout charts --chart-format png`: charts go to
-  `charts/relay/<fingerprint>/` and `charts/contact/<hash>/`, pages link to
-  them as `../../charts/...`, and a build without working PNG support fails
-  instead of switching to SVG charts.
-- The main Worker's assets directory gets two deploy-owned root files,
-  installed from `cloudflare-assets/.assetsignore.charts` and
-  `cloudflare-assets/_redirects.charts`: `.assetsignore` drops `/charts/`, and
-  `_redirects` sends the old chart URLs to their `/charts/` paths. Both are
-  present together or not at all, and `CHARTS_LAYOUT=beside` removes them. The
-  rendered `wrangler.assets.toml` does not change. The main Worker refuses a
-  tree that is not in this layout (a chart beside its page, or none below
-  `charts/`), and its verifier fails one without a chart below `charts/`.
-- `scripts/allium-deploy-cfcharts.sh` publishes the charts Worker from
-  `wrangler.charts.toml.template`: assets only, no Worker code, no route, a
-  missing chart answered with `charts/404.html`. Its directory,
-  `CF_CHARTS_STAGE_DIR`, is rebuilt every build as hard links to
-  `OUTPUT_DIR/charts/`, plus `404.html` as `charts/404.html`,
-  `charts/build-id.txt`, a new value in every stage, and the main Worker's
-  `_headers` (its rules match the full paths, `/charts/...` included) with
-  the marker header `X-Allium-Origin: charts` added to its `/*` rule.
-  Cloudflare keeps one rule per path, so a second `/*` rule would replace the
-  first and its security headers. A partition check requires every file of
-  the output tree to be uploaded by exactly one Worker, and the stage build
-  logs the charts per period (`1m`, `6m`, ...). Its state and summaries are
-  `logs/cfcharts-*`, never the main Worker's files.
-- Production reaches the charts Worker only through the zone route
-  `<host>/charts/*`, which is more specific than the main Worker's
-  `<host>/*`. Preview URLs have no route, so a main Worker preview cannot show
-  charts: its verifier checks instead that an old chart URL redirects to
-  `/charts/`. The charts Worker's own preview is verified against its stage:
-  the build ID must match, charts the new pages link to (relay, contact and
-  vanity-domain pages) and charts sampled from the stage must match byte for
-  byte, with nosniff, noindex and the marker; a repeat with the ETag must get
-  304, and a missing chart the 404 page with the marker. Pages that link to no
-  chart, or to a chart the stage lacks, fail.
-- Every build uploads the charts Worker alongside the other publishers. Its
-  stage also keeps the charts that the live main Worker version's pages link
-  and this build dropped (listed in `logs/cfcharts-live-charts` at each main
-  promotion), so a main promotion that fails or is withheld after the charts
-  promotion leaves no live page without its charts. It is promoted first,
-  then `--check-route` checks production:
-  `SITE_URL/charts/build-id.txt` must return the stage's build ID, which
-  proves that the route reaches the version just promoted; the charts that a
-  relay, a contact and a vanity-domain page link to, the stage's first and
-  largest charts and a missing chart must get the stage's bytes or the 404
-  page; and every answer must carry the marker, which the main Worker's
-  otherwise identical 404 page lacks, and no `X-Robots-Tag`. Network errors,
-  Cloudflare challenges and 403, 429 or 5xx answers make the check
-  inconclusive (exit 75) instead of failed, unless another attempt got a
-  wrong answer. One passing attempt is enough; it shows what the location
-  that answers the build server serves. Only then is the main Worker
-  promoted, and an old chart URL on `SITE_URL` is checked for its redirect (a
-  failure there only warns).
-- `logs/charts-layout-promoted` records the layout of the last promoted main
-  Worker version; a missing file means `beside`. A build whose
-  `CHARTS_LAYOUT` differs from it is a transition build. A charts failure
-  (preparation, upload, verification, promotion or route check) withholds
-  the main Worker's promotion: the withheld promotion is recorded in
-  `logs/cfassets-promotion-summary.tsv` with the charts Worker's exit status,
-  and the version is removed from `logs/cfassets-last-version`, so that no
-  later `--promote` deploys it. With `CF_ASSETS_REQUIRED=true` that fails the
-  job, as any Workers failure does. In a build that keeps the promoted layout
-  two cases promote the main Worker anyway, after which the job publishes
-  everything and exits non-zero: an inconclusive route check, and
-  `CF_CHARTS_ALLOW_STALE=true` (default `false`), which accepts that charts
-  new since the charts Worker's last good promotion fail until it recovers.
-  A transition build has no exception.
-- Before any publisher starts, the job checks the output tree. In this layout
-  no chart may be beside its page; in either layout every PNG link on the
-  pages must fit the layout (with `charts`, below `charts/` or `static/`;
-  with `beside`, not below `charts/`). A chart beside its page always stops
-  the job. Links that do not fit, and a failed Workers preparation (a version
-  over `CF_ASSETS_MAX_FILES` included, which the preparation already
-  refuses), stop a transition build and otherwise only warn. Stopping there
-  holds every publisher, DO and R2 included, so that all of them keep their
-  last build.
-- `logs/cfassets-shadow-summary.tsv` counts the files the main Worker's
-  version holds, without `charts/`, so its `file_count` drops at the switch
-  (the soak audit's file-count delta check flags that build). The main Worker
-  warns from 60000 files in this layout unless `CF_ASSETS_WARN_FILES` is set;
-  the charts Worker warns from `CF_CHARTS_WARN_FILES` (85000).
-- Each build that publishes the charts Worker appends a row to
-  `logs/cfcharts-job-timing.tsv`: the seconds to build its stage, when it was
-  promoted, and how long the main Worker's verified version waited for it.
-- DO and R2 mirror the output tree as before, `charts/` included. The first
-  build after switching the layout either way moves almost every chart key
-  once. If `DO_RCLONE_FAST_LIST_SUBTREES` is set, list `charts` first
-  (`charts,relay,contact,...`) before switching, and the job warns until it
-  is: each switch then uploads the new chart keys before the `relay/` and
-  `contact/` passes delete the old ones. When the Pages rollback function
-  misses a chart key in a backend, it reads the same chart's key in the other
-  layout from that backend before trying the next one, so both URLs work in
-  either layout; such an answer has `X-Served-From: <backend>; alias`.
-- `scripts/run-stage6-worker-domain-cutover.sh` accepts exactly one more zone
-  route, `<host>/charts/*` to `CF_CHARTS_WORKER_NAME`, and keeps it. That a
-  route outranks a Custom Domain on the same host is documented by
-  Cloudflare but untested here.
-- `scripts/run-cfassets-remediation-audit.sh` also checks that the charts
-  Worker serves its last successful promotion.
-
-`ALLIUM_NO_CHARTS=true` (default `false`) sheds the charts in an emergency, in
-either layout: Allium runs with `--no-charts`, so pages show no charts and the
-tree has no chart PNG, far below the file limit even beside the pages. In the
-charts layout such a build does not publish the charts Worker, which keeps
-serving its promoted version, so both kinds of chart URL keep working once a
-build with charts has published it. A main Worker version without charts
-leaves `logs/charts-layout-promoted` as it was, so the next build with charts
-after a layout switch is still a transition build.
-
-Before setting `CHARTS_LAYOUT=charts`, the charts Worker must exist with a
-deployment and the route `<host>/charts/*` must point at it. While the layout
-is still `beside`:
-
-- `scripts/allium-deploy-cfcharts.sh --bootstrap-deploy` creates the Worker
-  with `wrangler deploy` (the first upload of a new Worker cannot be a version
-  upload) from a stage of two files: the `_headers` with the marker and
-  `charts/404.html`. The first build in the charts layout uploads the charts.
-  It uses the pinned toolchain and the usual token files, starts from an
-  empty environment as the scheduled job does, refuses a configuration with a
-  route, logs Wrangler's upload counts, and fails if it leaves the checkout
-  unclean, which the scheduled job would refuse. It refuses, without
-  changing the stage, unless `CHARTS_LAYOUT` and
-  `logs/charts-layout-promoted` both say `beside`, and when the Worker
-  already has a deployment. Run it while no scheduled job runs, holding the
-  job's lock.
-- `scripts/allium-deploy-charts-route.sh status|create|delete` manages the
-  route with the Workers token, which it never prints or puts on a command
-  line. `create` requires exactly one route in the zone before and two after,
-  and prints the new route's ID. `delete` refuses while `CHARTS_LAYOUT=charts`
-  or while `logs/charts-layout-promoted` says `charts`.
-- `SITE_URL/charts/404.html` then answers with the 404 page and
-  `X-Allium-Origin: charts`. `scripts/allium-deploy-cfcharts.sh
-  --check-bootstrap-route` checks that, and that a missing chart gets that
-  page as a 404, without `X-Robots-Tag`; it exits 75 when Cloudflare
-  answers with a challenge, 403, 429 or 5xx, or the network fails. Until the
-  layout changes, nothing links to `/charts/`.
-
-Rules for operating the chart layout:
-
-- Never delete the `<host>/charts/*` route or the charts Worker while live or
-  cached pages link to `/charts/`: every chart would fail. Rolling the main
-  Worker back to a version from before the switch serves its own charts
-  again; then write `beside` to `logs/charts-layout-promoted`, so that the
-  next build in the charts layout is a transition build again.
-- Switch only once a build has run this version of the update job: an older
-  job runs Allium without `--chart-layout`, and the main Worker refuses that
-  tree.
-- Each job keeps the `CHARTS_LAYOUT`, `ALLIUM_NO_CHARTS`,
-  `CF_CHARTS_WORKER_NAME` and `CF_ASSETS_ENABLED` it started with, whatever
-  `config.env` says later, and reads `CF_CHARTS_ALLOW_STALE` once.
-  `CF_ASSETS_ALLOW_PROMOTION` is read at each promotion, so setting it to
-  `false` also stops the promotions of a job that is already running.
-- To go back, set `CHARTS_LAYOUT=beside`, again a transition build: Allium
-  writes the charts beside their pages again, the deploy removes
-  `.assetsignore` and `_redirects`, and any `charts/relay` and
-  `charts/contact` that Allium left, and the main Worker serves the charts
-  again, as long as the whole tree stays within `CF_ASSETS_MAX_FILES`. Keep
-  the route and the charts Worker for `/charts/` URLs already handed out, and
-  keep `CF_CHARTS_WORKER_NAME` set while the route exists: the Stage 6
-  cutover accepts the route only for that Worker.
-- A charts Worker version rolled back by hand is replaced at the next build.
-  Freeze both Workers with `CF_ASSETS_ALLOW_PROMOTION=false` first.
-- With `CHARTS_LAYOUT=charts`, an Allium without `--chart-layout` is never
-  built: a pulled one is set back for each build, and one already checked
-  out stops every build until Allium has the option again or the layout is
-  set back to `beside`.
-- A broken PNG install (for example after an operating system upgrade)
-  stops every build in this layout instead of switching to SVG charts:
-  reinstall the packages rather than changing the layout.
-- Keep the removal of a stale root `.assetsignore` or `_redirects` (see the
-  shadow section above): it is what undoes this layout's control files when
-  the layout, or this code, goes back.
-
-### Heartbeat
-
-`HEALTHCHECK_URL`, unset by default, names a healthchecks.io-style check that
-expects a ping per scheduled job. Each job pings `<url>/start` when it
-starts, `<url>` when it succeeds and `<url>/fail` when it fails, with
-`class=<class> exit=<status>` as the body. The class is one of `allium`,
-`setup`, `charts_config`, `local`, `storage`, `cap`, `main_prepare`,
-`main_upload`, `main_promote`, `charts_prepare`, `charts_upload`,
-`charts_promote`, `route_definitive`, `route_inconclusive` and `charts_stale`
-(see the chart layout above), or `other`. A Workers failure (`cap`, `main_*`,
-`charts_*`, `route_*`) pings `<url>/fail` even when the job exits 0, as it
-does unless `CF_ASSETS_REQUIRED=true`. A failed DO upload, a failed old-URL
-redirect check and an Allium held back for the charts layout ping
-`<url>/log` without failing the job. The URL goes to curl on standard input
-and is never logged, a failed ping never changes the job, and an endpoint
-that does not answer delays it by about ten seconds per ping at most.
-
-### Workers toolchain updates
-
-`package.json` and `pnpm-lock.yaml` pin Wrangler and, through
-`devEngines.runtime`, the Node.js release it runs on. pnpm installs that
-Node.js into `node_modules/.bin/node` and the `wrangler` shim prefers it, so
-the host's Node.js only has to run pnpm through corepack (Wrangler 4.87.0 and
-later refuse to start on Node.js 20). When a guarded auto-pull changes either
-file, the next job runs `scripts/allium-deploy-sync-toolchain.sh` before the
-Workers upload. It moves the current `node_modules` aside, runs
-`pnpm install --frozen-lockfile` within `CF_ASSETS_TOOLCHAIN_INSTALL_TIMEOUT`
-seconds, and accepts the result only if `wrangler --version` equals the pin and
-the checkout is still clean. Any failure restores the previous `node_modules`
-and restores the toolchain manifests that exist in HEAD (`package.json`,
-`pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`) if the install changed
-them. Any other change, including a newly added manifest such as `.npmrc`, is
-reported in the job log and left in place, never deleted: inspect it before
-the next attempt. The job then continues with the previous toolchain.
-
-The install runs `corepack pnpm`, so the `packageManager` pin and its
-`allowBuilds` list apply; a `pnpm` on `PATH` is used only if it reports that
-exact version. pnpm, the build scripts it allows and the new Wrangler start
-from an empty environment that keeps only `PATH`, `HOME`, user, locale, temp,
-proxy and cache-directory variables, so they inherit none of the deploy job's
-environment variables. They still run as the deploy user in the checkout and
-can read any file that user can read, including `config.env`; the exact pins,
-lockfile integrity and the `allowBuilds` list are what guard against a
-compromised package. GNU `timeout` is required, because it stops the whole
-install process group when `CF_ASSETS_TOOLCHAIN_INSTALL_TIMEOUT` expires. The same lockfile is retried after
-`CF_ASSETS_TOOLCHAIN_RETRY_SECONDS` (default 3600); a different lockfile is
-tried at once. `pnpm-workspace.yaml` and `.npmrc` count as part of the
-lockfile. Set `CF_ASSETS_TOOLCHAIN_AUTO_SYNC=false` to install manually with
-`corepack pnpm install --frozen-lockfile`.
-
-`patches/wrangler@<version>.patch`, listed under `patchedDependencies` in
-`pnpm-workspace.yaml` and pinned by hash in `pnpm-lock.yaml`, makes Wrangler's
-asset upload find each requested file through a hash index instead of scanning
-the whole asset manifest once per file. It chooses exactly the same files and
-removes up to a minute of single-threaded work before uploads start. The patch
-applies to one exact Wrangler version. When you upgrade Wrangler, re-create the
-patch with `pnpm patch wrangler@<new version>` and `pnpm patch-commit`, or drop
-it once Wrangler includes the fix; `node --test` fails while the pin and the
-patch disagree, and pnpm refuses a patch it cannot apply, so the sync keeps the
-previous toolchain.
-
-To roll back a toolchain change, revert only the `package.json` and
-`pnpm-lock.yaml` change: the next job reinstalls the previous pin, offline
-when the local pnpm store still has it. Reverting this sync step itself does
-not reinstall anything; run `corepack pnpm install --frozen-lockfile` by hand
-afterwards.
-
----
-
-## DigitalOcean Spaces Setup
-
-### 1. Create a Space
-
-1. Log in to [DigitalOcean](https://cloud.digitalocean.com/)
-2. Go to **Spaces** → **Create a Space**
-3. Configure:
-   - **Region:** Choose closest to your users (nyc3, sfo3, ams3, sgp1, fra1)
-   - **Name:** `your-metrics-content` (must be globally unique)
-   - **File Listing:** Enable "Restrict File Listing" = OFF (public read)
-4. Click **Create a Space**
-
-### 2. Enable CDN (Optional)
-
-DO Spaces CDN is optional. It's faster but has a limitation:
-
-| Mode | Setting | Speed | Freshness |
-|------|---------|-------|-----------|
-| **Origin** | `DO_SPACES_CDN=false` | Slower | Always fresh |
-| **CDN** | `DO_SPACES_CDN=true` | Faster | Up to ~1hr stale |
-
-**Important:** DO Spaces CDN does NOT support cache invalidation/purging. If using CDN, content may be up to 1 hour stale.
-
-To enable CDN:
-1. Go to your Space → **Settings** → **CDN** → **Enable CDN**
-2. Set in `config.env`:
-   ```bash
-   DO_SPACES_CDN=true
-   ```
-
-### 3. Create Spaces Access Keys
-
-1. Go to **API** → **Spaces Keys**
-2. Click **Generate New Key**
-3. Name it (e.g., "allium-deploy")
-4. Copy both the **Key** and **Secret** (secret shown only once!)
-5. Add to `config.env`:
-   ```bash
-   DO_SPACES_KEY=XXXXXXXXXXXXXXXXXXXX
-   DO_SPACES_SECRET=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-   ```
-
-### 4. Make Bucket Public
-
-For the Pages function to fetch content, the bucket must be publicly readable:
-
-1. Go to your Space → **Settings**
-2. Under **File Listing**, ensure it's set to allow public access
-3. Alternatively, use a CDN endpoint which handles this automatically
-
-### 5. Configure rclone (Automatic)
-
-The upload script auto-configures rclone on first run. Manual setup:
-
-```bash
-rclone config create spaces s3 \
-    provider=DigitalOcean \
-    access_key_id="YOUR_KEY" \
-    secret_access_key="YOUR_SECRET" \
-    endpoint="nyc3.digitaloceanspaces.com" \
-    acl=public-read
-```
-
-### 6. View Metrics
-
-DigitalOcean does not provide built-in Spaces metrics via the dashboard or API. To monitor usage:
-
-- **Bandwidth:** Check your monthly bill/usage in **Billing** → **Usage**
-- **Storage size:** Run `rclone size spaces:your-bucket`
-- **Object count:** Run `rclone ls spaces:your-bucket | wc -l`
-- **Third-party tools:** Consider [MetricFire](https://www.metricfire.com/integrations/digital-ocean/) or custom scripts using the S3-compatible API
-
----
-
-## Search Functionality
-
-Server-side search for Tor relay metrics without client-side JavaScript.
-
-### How It Works
-
-1. **Search Form** (on any page) → `/search?q=...` GET request
-2. **Pages Function** (`functions/search.js`) → Loads `search-index.json`
-3. **302 Redirect** → Direct to matching relay/family/AS/country page
-
-### Supported Query Types
-
-| Query Type | Example | Result |
-|------------|---------|--------|
-| Fingerprint (full) | `ABCD1234...` (40 hex) | Direct to relay page |
-| Fingerprint (partial) | `ABCD12` (6-39 hex) | Direct or disambiguation |
-| Nickname | `MyTorRelay` | Direct to relay page |
-| AS Number | `AS24940` or `24940` | Direct to AS page |
-| Country | `Germany` or `de` | Direct to country page |
-| IP Address | `1.2.3.4` | Direct to relay page |
-| Contact/AROI | `example.org` | Direct to contact page |
-| Platform | `linux`, `freebsd` | Direct to platform page |
-| Flag | `exit`, `guard` | Direct to flag page |
-
-### CIISS Version Indicators (v1.6+ index)
-
-Search disambiguation pages display **CIISS v2 / v3** indicators next to relay names when the operator's ContactInfo declares a `ciissversion`. v3 indicators are green; v2 indicators are grey; relays without an AROI declaration show no indicator. This requires `search-index.json` schema **v1.6+** (Allium build with [PR #207](https://github.com/1aeo/allium/pull/207) or later, which adds the per-relay `vn` field). Older indexes (≤ v1.5) continue to work unchanged with no indicators shown.
-
-### Security Features
-
-- **Input Validation:** Query length limit (100 chars), character allowlist
-- **XSS Prevention:** All output HTML-escaped
-- **Open Redirect Prevention:** Path allowlist validation
-- **Security Headers:** CSP, X-Frame-Options, X-Content-Type-Options
-- **ReDoS-Safe Patterns:** All regex patterns are O(n) complexity
-- **Error Handling:** Generic messages to users, detailed server logs
-
-### Requirements
-
-The search function requires `search-index.json` to be generated by allium and deployed with the site. This is handled automatically when running allium with search index generation enabled.
-
----
-
-## Architecture
-
-The diagram below is the production request path retained through Stage 2.
-Workers Static Assets publishes in parallel to it, but only its `workers.dev`
-candidate and non-production rehearsal hostname are reachable.
-
-```
-┌─────────────────────────┐
-│  Allium Generator       │
-│  (Python + Jinja2)      │
-│  ~4 min / ~21k files    │
-│  + search-index.json    │
-└───────────┬─────────────┘
-            │
-            ▼
-┌─────────────────────────┐
-│  Local Output           │
-│  ~/metrics-output       │
-│  ~3GB                   │
-└───────────┬─────────────┘
-            │ rclone sync (128 parallel)
-            ▼
-┌─────────────────────────┐  ┌─────────────────────────┐
-│  Cloudflare R2          │  │  DigitalOcean Spaces    │
-│  (native binding)       │  │  (HTTP fetch via CDN)   │
-└───────────┬─────────────┘  └───────────┬─────────────┘
-            │                            │
-            └──────────┬─────────────────┘
-                       │ STORAGE_ORDER determines try order
-                       ▼
-         ┌─────────────────────────┐
-         │  Cloudflare Pages       │
-         │  ├─ [[path]].js (content)
-         │  └─ search.js (search)  │
-         └─────────────────────────┘
 ```
 
 ---
@@ -632,269 +66,186 @@ candidate and non-production rehearsal hostname are reachable.
 ## Commands
 
 ```bash
-# === Upload Commands ===
+# === Scheduled Pipeline ===
+./scripts/allium-deploy-update.sh                  # Full build, verify, publish, purge & prune
+tail -f ~/allium-deploy/logs/update.log            # Follow deployment output
 
-# Upload to R2
-~/allium-deploy/scripts/allium-deploy-upload-r2.sh
+# === Storage Uploads & Backups ===
+./scripts/allium-deploy-upload-r2.sh               # Sync/verify R2 (+ daily backups)
+./scripts/allium-deploy-upload-r2.sh --force-content-sync
+./scripts/allium-deploy-upload-r2.sh --force-backup
+./scripts/allium-deploy-upload-r2.sh --skip-local-backup
+./scripts/allium-deploy-upload-r2.sh --list-backups
 
-# Upload to DO Spaces
-~/allium-deploy/scripts/allium-deploy-upload-do.sh
+./scripts/allium-deploy-upload-do.sh               # Sync DO Spaces (+ daily backups)
+./scripts/allium-deploy-upload-do.sh --force-backup
+./scripts/allium-deploy-upload-do.sh --skip-local-backup
+./scripts/allium-deploy-upload-do.sh --remote-backup-only --force-backup
+./scripts/allium-deploy-upload-do.sh --list-backups
 
-# List backups (R2)
-~/allium-deploy/scripts/allium-deploy-upload-r2.sh --list-backups
+# === Cloudflare Workers & Pages ===
+./scripts/allium-deploy-cfassets.sh --generate-only # Render wrangler.assets.toml + overlays & check file count
+./scripts/allium-deploy-cfassets.sh --upload-only   # Upload & preview-verify candidate (never promotes)
+./scripts/allium-deploy-cfassets.sh --promote       # Promote verified version@100% (if allowed)
+./scripts/allium-deploy-cfcharts.sh --check-config  # Validate CHARTS_LAYOUT=charts configuration
+./scripts/allium-deploy-cfpages.sh                  # Deploy Pages rollback functions
 
-# List backups (DO Spaces)
-~/allium-deploy/scripts/allium-deploy-upload-do.sh --list-backups
-
-# Force backup even if done today or its frequency is off
-~/allium-deploy/scripts/allium-deploy-upload-r2.sh --force-backup
-
-# Take a DO snapshot now, even if done today or DO_BACKUP_FREQUENCY=off
-~/allium-deploy/scripts/allium-deploy-upload-do.sh --remote-backup-only --force-backup
-
-# === Other Commands ===
-
-# Manual update (runs allium + upload)
-~/allium-deploy/scripts/allium-deploy-update.sh
-
-# View logs
-tail -f ~/allium-deploy/logs/update.log
-
-# Deploy Pages function
-~/allium-deploy/scripts/allium-deploy-cfpages.sh
-
-# Generate and inspect the route-free Workers Assets configuration only
-CF_ASSETS_DIRECTORY="$HOME/metrics-output" \
-  ~/allium-deploy/scripts/allium-deploy-cfassets.sh --generate-only
-
-# Upload and verify one immutable shadow version (never promotes)
-~/allium-deploy/scripts/allium-deploy-cfassets.sh --upload-only
-
-# Inspect the bounded Stage 1/2 soak result
-tail -n 5 ~/allium-deploy/logs/cfassets-shadow-summary.tsv
-cat ~/allium-deploy/logs/cfassets-shadow-consecutive-successes
-
-# Check cron status
-~/allium-deploy/scripts/allium-cron-check.sh
+# === Diagnostics & Tests ===
+./scripts/allium-cron-check.sh                      # Verify /etc/cron.d/allium
+pnpm test                                           # Run Node tests + all shell behavior suites
 ```
+
+---
+
+## Configuration (`config.env`)
+
+[`config.env.example`](config.env.example) is the canonical reference for all variables, comments, and safe defaults. Configuration groups:
+
+| Group | Key Variables | Purpose |
+|---|---|---|
+| **Storage selection** | `STORAGE_ORDER` | Comma-separated backend order (`r2`, `do`, `failover`) for Pages fallback and `/search` AROI checks |
+| **Workers & promotion** | `CLOUDFLARE_ACCOUNT_ID`, `CF_ASSETS_ENABLED`, `CF_ASSETS_REQUIRED`, `CF_ASSETS_ALLOW_PROMOTION`, `CF_ASSETS_WORKER_NAME`, `CF_ASSETS_PREVIEW_ALIAS`, `CF_ASSETS_COMPATIBILITY_DATE`, `CF_ASSETS_VERIFY_*`, `CF_ASSETS_UPLOAD_*`, `CF_ASSETS_MAX_JOB_SECONDS`, `CF_ASSETS_MAX_FILES`, `CF_ASSETS_WARN_FILES` | Workers Static Assets credentials, preview retries, file-count limits (`100000` max; warn at `98000` or `60000` with `charts` layout), and promotion gates |
+| **Chart layout** | `CHARTS_LAYOUT`, `CF_CHARTS_WORKER_NAME`, `CF_CHARTS_PREVIEW_ALIAS`, `CF_CHARTS_STAGE_DIR`, `CF_CHARTS_WARN_FILES`, `CF_CHARTS_ALLOW_STALE`, `ALLIUM_NO_CHARTS` | `beside` (default) vs split `charts` Worker on `<host>/charts/*`, plus `--no-charts` emergency shedding |
+| **Heartbeat** | `HEALTHCHECK_URL` | Optional healthchecks.io-style ping endpoint for start/success/failure/warnings |
+| **Toolchain & logs** | `CF_ASSETS_TOOLCHAIN_AUTO_SYNC`, `CF_ASSETS_TOOLCHAIN_INSTALL_TIMEOUT`, `CF_ASSETS_TOOLCHAIN_RETRY_SECONDS`, `WRANGLER_LOG*`, `ALLIUM_UPDATE_LOG_*` | Automated `pnpm` toolchain sync and bounded log rotation |
+| **R2 & DO sync** | `R2_ENABLED`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_BINDING_NAME`, `R2_CONTENT_SYNC_INTERVAL`, `R2_CONTENT_VERIFY_PATHS`, `RCLONE_*`, `DO_ENABLED`, `DO_SPACES_*`, `DO_RCLONE_*` | R2 credentials and daily verification (`every-build` template default; `daily` in production); DO Spaces credentials, CDN toggle, TPS limit (`120`), HTTP/2 disable, checksum, `--s3-no-head`, and fast-list subtrees |
+| **Backups & retention** | `LOCAL_BACKUP_FREQUENCY`, `R2_BACKUP_FREQUENCY`, `DO_BACKUP_FREQUENCY`, `KEEP_BACKUPS`, `LOCAL_KEEP_BACKUPS`, `DO_REMOTE_BACKUP_INLINE`, `DO_REMOTE_BACKUP_*`, `DO_IO_LOCK_WAIT_SECONDS` | Snapshot frequencies, local/R2 retention counts, and deferred DO remote snapshot throttling |
+| **Failover & Pages** | `FAILOVER_ORIGIN_URL`, `PAGES_PROJECT_NAME`, `WRANGLER_COMPATIBILITY_DATE`, `PAGES_BUILD_OUTPUT_DIR`, `SITE_URL`, `PAGES_PURGE_URL`, `CACHE_KEY_ORIGIN`, `PAGES_ROLLBACK_MAINTENANCE_ENABLED`, `PAGES_BULK_PURGE_ENABLED`, `CACHE_TTL_*`, `PURGE_SECRET` | Fallback origin, Pages rollback deployment, cache TTLs, and `/_purge` control |
+| **Sparse telemetry** | `SOURCE_EVENTS_ENABLED`, `SOURCE_EVENTS_DATASET` | Analytics Engine point only on R2/failover fallback or total failure (no URLs, queries, IPs, or user agents) |
+| **Local paths & cron** | `OUTPUT_DIR`, `BACKUP_DIR`, `ALLIUM_DIR`, `RCLONE_PATH`, `CRON_SCHEDULE` | Output/backup/repo paths and cron schedule (`15,45 * * * *`) |
+
+---
+
+## Backup & Rollback
+
+### Snapshot Locations & Frequencies
+
+- **Local:** `~/metrics-backups/backup-YYYY-MM-DD_HHMMSS/`
+- **R2:** `r2-metrics:<bucket>/_backups/YYYY-MM-DD_HHMMSS/`
+- **DO Spaces:** `spaces-metrics:<bucket>/_backups/YYYY-MM-DD_HHMMSS/`
+
+`LOCAL_BACKUP_FREQUENCY`, `R2_BACKUP_FREQUENCY`, and `DO_BACKUP_FREQUENCY` control how often snapshots run:
+
+| Value | Behavior |
+|---|---|
+| `daily` (default) | Once per day (gated by `logs/last-*-backup-date`) |
+| `every-run` | On every upload invocation |
+| `off` | Skipped on scheduled runs (manual `--force-backup` still takes it) |
+
+The deprecated `DAILY_LOCAL_BACKUP`, `DAILY_R2_BACKUP`, and `DAILY_DO_BACKUP` variables still work when the matching `*_FREQUENCY` setting is unset (`true` means `daily`, `false` means `every-run`, never `off`), emitting a deprecation notice. Any unrecognized value fails before `rclone` runs.
+
+### Coordinated Daily Local Backup & Retention
+
+When both `R2_ENABLED=true` and `DO_ENABLED=true` in `allium-deploy-update.sh`, local backup runs once instead of once per backend:
+
+- R2 executes `create_local_backup` first and publishes its result (`created`, `already_done`, `skipped`, or `failed`) via `ALLIUM_LOCAL_BACKUP_RESULT_FILE`.
+- DO waits on `ALLIUM_PRIMARY_LOCAL_BACKUP_RESULT_FILE`. If R2 succeeded (`created` or `already_done`), DO skips its local backup; if R2 failed or skipped, DO runs the local backup itself before modifying live DO objects and aborts the upload if that fallback fails or times out.
+- Concurrent local backups serialize with `flock` on `logs/.local-backup.lock` (`LOCAL_BACKUP_LOCK_FILE`) and write into `backup-*.tmp.*` staging directories renamed atomically on completion.
+- `--skip-local-backup` (or `ALLIUM_SKIP_LOCAL_BACKUP=true`) skips local backup for a single run unless `--force-backup` is passed (which enforces local backup completion).
+- **Retention:** `KEEP_BACKUPS` governs R2 `_backups/` retention; `LOCAL_KEEP_BACKUPS` sets an independent retention count for local `BACKUP_DIR` (defaulting to `KEEP_BACKUPS`). [`scripts/allium-deploy-prune.sh`](scripts/allium-deploy-prune.sh) retains `SAFETY_BUFFER=2` extra backups before pruning and skips stale `backup-*.tmp.*` cleanup while `logs/.local-backup.lock` is held.
+- **Deferred DO remote snapshots:** With `DO_REMOTE_BACKUP_INLINE=false`, scheduled uploads skip the DO server-side snapshot. Run [`scripts/run-do-remote-backup.sh`](scripts/run-do-remote-backup.sh) hourly instead (throttled at `DO_REMOTE_BACKUP_TPS_LIMIT=30` ops/s under `/tmp/allium-do-spaces-io.lock`), or run `./scripts/allium-deploy-upload-do.sh --remote-backup-only --force-backup` on demand.
+
+### Storage Rollback
+
+```bash
+# Restore a local snapshot to R2 or DO Spaces
+./scripts/allium-deploy-upload-r2.sh ~/metrics-backups/backup-2025-12-01_063000
+./scripts/allium-deploy-upload-do.sh ~/metrics-backups/backup-2025-12-01_063000
+
+# Restore a remote snapshot to OUTPUT_DIR, then re-publish
+~/bin/rclone sync r2-metrics:<bucket>/_backups/2025-12-01_063000 ~/metrics-output
+~/bin/rclone sync spaces-metrics:<bucket>/_backups/2025-12-01_063000 ~/metrics-output
+```
+
+For Workers Static Assets version rollback or route-removal rollback to Cloudflare Pages, see [docs/WORKERS_STATIC_ASSETS.md](docs/WORKERS_STATIC_ASSETS.md).
+
+---
+
+## Search, Heartbeat & Workers Toolchain
+
+### Search (`/search`)
+
+Production `/search?q=...` requests are handled by `workers/search.js` delegating to `functions/search.js` (reading `search-index.json` via the `ALLIUM_ASSETS` binding, with storage fallback for Pages). Supported queries include full/partial fingerprints, nicknames, AS numbers, countries, IPv4/IPv6 addresses, contact/AROI domains, platforms, and flags.
+
+- **Index schema:** Requires `search-index.json` generated by Allium. Schema `v1.6+` renders CIISS `v2` (grey) / `v3` (green) badges from each relay's `vn` field on disambiguation pages; `v1.7` preserves `/platform/<folder>/` casing; `2.x` major bumps fail closed.
+- **Validation:** `scripts/validate-search-discovery.py` verifies search and crawler discovery outputs after every Allium run.
+
+### Heartbeat (`HEALTHCHECK_URL`)
+
+When `HEALTHCHECK_URL` is configured, each update pings `<url>/start`, `<url>` on success, `<url>/fail` (`class=<class> exit=<status>`) on failure, and `<url>/log` on non-fatal warnings (failed DO upload, failed old-URL redirect check, or Allium held back for charts layout).
+
+Failure classes: `allium`, `setup`, `charts_config`, `local`, `storage`, `cap`, `main_prepare`, `main_upload`, `main_promote`, `charts_prepare`, `charts_upload`, `charts_promote`, `route_definitive`, `route_inconclusive`, `charts_stale`, or `other`. Workers failures ping `/fail` even when `CF_ASSETS_REQUIRED=false` exits `0`.
+
+### Workers Toolchain (`allium-deploy-sync-toolchain.sh`)
+
+`package.json` and `pnpm-lock.yaml` pin Wrangler (`4.149.0`) and Node.js (`24.21.0` via `devEngines.runtime`). When a guarded auto-pull changes `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, or `.npmrc`, `scripts/allium-deploy-sync-toolchain.sh` runs `corepack pnpm install --frozen-lockfile` in an empty environment with GNU `timeout` (`CF_ASSETS_TOOLCHAIN_INSTALL_TIMEOUT`), verifies `wrangler --version` and a clean checkout, and restores the prior `node_modules` and `HEAD` manifests on failure (retrying the same lockfile after `CF_ASSETS_TOOLCHAIN_RETRY_SECONDS`).
+
+`patches/wrangler@4.149.0.patch` (listed in `pnpm-workspace.yaml` `patchedDependencies`) replaces Wrangler's linear scan of the asset manifest with a hash `Map` lookup.
 
 ---
 
 ## Directory Structure
 
 ```
-allium/                 # Allium source (git clone)
-allium-deploy/          # This deployment repo
-├── config.env          # Your settings (gitignored)
-├── config.env.example  # Template
-├── wrangler.toml.template  # Wrangler config template
-├── wrangler.toml       # Generated at deploy time (gitignored)
-├── wrangler.assets.toml.template # Route-free Workers Assets template
-├── wrangler.assets.toml # Generated shadow config (gitignored)
-├── wrangler.charts.toml.template # Charts-only Worker template (chart layout)
-├── wrangler.charts.toml # Generated charts config (gitignored)
-├── cloudflare-assets/  # Workers _headers, static 404 and chart layout overlays
+allium-deploy/
+├── config.env.example                     # Canonical configuration reference
+├── package.json                           # Pinned Wrangler/Node/pnpm & test scripts
+├── pnpm-lock.yaml                         # Lockfile & patch hashes
+├── pnpm-workspace.yaml                    # allowBuilds & patchedDependencies
+├── wrangler.assets.toml.template          # Main Workers Static Assets template
+├── wrangler.charts.toml.template          # Split charts Worker template
+├── wrangler.toml.template                 # Cloudflare Pages rollback template
+├── cloudflare-assets/
+│   ├── _headers                           # Security, cache & preview noindex rules
+│   ├── 404.html                           # Static 404 page
+│   ├── .assetsignore.charts               # Excludes /charts/ from main Worker
+│   └── _redirects.charts                  # 302 redirects legacy chart URLs
 ├── functions/
-│   ├── [[path]].js     # Pages function (multi-storage + failover)
-│   └── search.js       # Search function (query → redirect)
+│   ├── _shared.js                         # MIME types, security headers & HTML escaping
+│   ├── [[path]].js                        # Pages multi-storage, failover & /_purge
+│   └── search.js                          # Search handler shared by Workers & Pages
 ├── workers/
-│   └── search.js       # Workers /search entry point + ALLIUM_ASSETS binding
+│   └── search.js                          # Workers /search entry point + ALLIUM_ASSETS
+├── patches/
+│   └── wrangler@4.149.0.patch             # Hash-indexed asset manifest lookup patch
+├── docs/
+│   └── WORKERS_STATIC_ASSETS.md           # Workers architecture, operations & rollback
 ├── scripts/
-│   ├── allium-deploy-install.sh      # One-time setup
-│   ├── allium-deploy-update.sh       # Runs every 30 min via cron
-│   ├── allium-cron-check.sh          # Verify cron is installed
-│   ├── allium-deploy-upload-r2.sh    # R2 upload with backups
-│   ├── allium-deploy-upload-do.sh    # DO Spaces upload with backups
-│   ├── allium-deploy-upload-common.sh # Shared upload functions
-│   ├── allium-deploy-prune.sh        # Remove old backups
-│   ├── allium-deploy-cfpages.sh      # Deploy Pages function
-│   ├── allium-deploy-cfassets.sh     # Upload route-free Worker versions
-│   ├── allium-deploy-cfcharts.sh     # Charts-only Worker (chart layout)
-│   ├── allium-deploy-charts-route.sh # Its zone route (chart layout)
-│   ├── allium-deploy-verify-cfassets.sh # Candidate health gate
-│   └── allium-deploy-verify-cfcharts.sh # Chart checks (chart layout)
-├── logs/
-│   ├── update.log
-│   ├── last-local-backup-date
-│   ├── last-r2-backup-date
-│   └── last-do-backup-date
-└── public/             # Empty dir for Pages build output
+│   ├── allium-deploy-install.sh           # Install/cron/update: one-time setup
+│   ├── allium-cron-check.sh               # Install/cron/update: cron verification
+│   ├── allium-deploy-update.sh            # Install/cron/update: main scheduled pipeline
+│   ├── allium-deploy-lib.sh               # Install/cron/update: shared shell helpers
+│   ├── allium-deploy-cfassets.sh          # Workers publish & verify: main config/upload/promote
+│   ├── allium-deploy-verify-cfassets.sh   # Workers publish & verify: main preview checks
+│   ├── allium-deploy-cfcharts.sh          # Workers publish & verify: split charts Worker
+│   ├── allium-deploy-verify-cfcharts.sh   # Workers publish & verify: charts preview & route checks
+│   ├── allium-deploy-charts-route.sh      # Workers publish & verify: <host>/charts/* route CRUD
+│   ├── allium-deploy-cfpages.sh           # Workers publish & verify: Pages rollback deploy
+│   ├── allium-deploy-upload-common.sh     # DO/R2 upload/backup/prune: shared helpers & locks
+│   ├── allium-deploy-upload-r2.sh         # DO/R2 upload/backup/prune: R2 sync, verify & backup
+│   ├── allium-deploy-upload-do.sh         # DO/R2 upload/backup/prune: DO sync & backup
+│   ├── allium-deploy-prune.sh             # DO/R2 upload/backup/prune: local & R2 pruning
+│   ├── run-do-remote-backup.sh            # DO/R2 upload/backup/prune: hourly DO snapshot runner
+│   ├── allium-deploy-sync-toolchain.sh    # Toolchain/log maintenance: pinned pnpm/Wrangler sync
+│   ├── allium-deploy-maintain-logs.sh     # Toolchain/log maintenance: bounded log rotation
+│   ├── validate-search-discovery.py       # Audit/validation/cutover: search & discovery checks
+│   ├── verify-deployed-matches-checkout.sh# Audit/validation/cutover: Pages deploy SHA check
+│   ├── audit-cfassets-soak.js             # Audit/validation/cutover: shadow soak TSV audit
+│   ├── audit-cfassets-stage4.js           # Audit/validation/cutover: promotion correlation audit
+│   ├── audit-remote-live-stats.js         # Audit/validation/cutover: live output stats check
+│   ├── run-cfassets-remediation-audit.sh  # Audit/validation/cutover: read-only live audit
+│   ├── run-stage4-24h-acceptance.sh       # Audit/validation/cutover: 24h acceptance wrapper
+│   ├── run-stage5-24h-activation.sh       # Audit/validation/cutover: Stage 5 R2 daily toggle
+│   └── run-stage6-worker-domain-cutover.sh# Audit/validation/cutover: Custom Domain cutover
+├── tests/                                 # Node tests (*.test.js) & shell suites (test-*.sh)
+├── logs/                                  # Runtime logs, markers & TSV summaries (gitignored)
+└── public/                                # Empty directory for Pages deployment
 ```
 
 ---
 
-## Performance
+## Requirements & License
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Allium generation | ~4 min | 9,800 relays → 21,000 pages |
-| R2 upload (full) | ~3 min | 128 parallel transfers |
-| DO Spaces upload (full) | ~3 min | 128 parallel transfers |
-| Upload (incremental) | <1 min | Only changed files |
-| Local backup | ~1.5 min | Download from storage |
-| Remote backup | ~3.5 min | Server-side copy |
-
----
-
-## Backup & Rollback
-
-**Automatic backups (once daily by default):**
-- Local: `~/metrics-backups/backup-YYYY-MM-DD_HHMMSS/`
-- R2: `r2:bucket/_backups/YYYY-MM-DD_HHMMSS/`
-- DO Spaces: `spaces:bucket/_backups/YYYY-MM-DD_HHMMSS/`
-
-`LOCAL_BACKUP_FREQUENCY`, `R2_BACKUP_FREQUENCY` and `DO_BACKUP_FREQUENCY` in
-`config.env` set how often each one runs:
-
-| Value | Behavior |
-|-------|----------|
-| `daily` (default) | Once per day; later runs that day skip it |
-| `every-run` | On every upload run, copying the whole bucket each time |
-| `off` | Never on scheduled runs; a manual forced run still takes it (see below) |
-
-The older `DAILY_LOCAL_BACKUP`, `DAILY_R2_BACKUP` and `DAILY_DO_BACKUP`
-settings still work while the new setting is unset, and each run logs a
-deprecation notice. `true` there means `daily` and `false` means `every-run`,
-not `off`. When both are set, the new setting wins. Any other value stops the
-upload before it starts.
-
-`--force-backup` on an upload script takes that run's backups even when they
-are off or already done today. With `DO_REMOTE_BACKUP_INLINE=false` the upload
-does not take the DO snapshot, so `--force-backup` there forces only the local
-backup. The hourly `scripts/run-do-remote-backup.sh` takes the DO snapshot
-instead: it does nothing when DO is off and takes at most one snapshot per day
-otherwise. To take one now, run
-`scripts/allium-deploy-upload-do.sh --remote-backup-only --force-backup`.
-
-**Rollback from local backup:**
-```bash
-./scripts/allium-deploy-upload-r2.sh ~/metrics-backups/backup-2025-12-01_063000
-# or
-./scripts/allium-deploy-upload-do.sh ~/metrics-backups/backup-2025-12-01_063000
-```
-
-**Rollback from remote backup:**
-```bash
-# From R2
-~/bin/rclone sync r2:bucket/_backups/2025-12-01_063000 ~/metrics-output
-./scripts/allium-deploy-upload-r2.sh
-
-# From DO Spaces
-~/bin/rclone sync spaces:bucket/_backups/2025-12-01_063000 ~/metrics-output
-./scripts/allium-deploy-upload-do.sh
-```
-
----
-
-## Multi-Storage Modes
-
-### R2 Only (`STORAGE_ORDER=r2,failover`)
-
-- Native R2 binding (fastest)
-- Best for: Maximum performance
-
-### DO Spaces Only (`STORAGE_ORDER=do,failover`)
-
-- HTTP fetch from Spaces CDN
-- Best for: Simplicity
-
-### Both (`STORAGE_ORDER=do,r2,failover` or `r2,do,failover`)
-
-- Tries storage backends in order
-- Best for: Redundancy
-
-**Response headers show which source served the request:**
-- `X-Served-From: cloudflare-r2`
-- `X-Served-From: digitalocean-spaces`
-- `X-Served-From: failover-origin`
-
----
-
-## Origin Failover
-
-Independent of storage selection, you can configure a failover origin:
-
-```bash
-FAILOVER_ENABLED=true
-FAILOVER_ORIGIN_URL=https://backup.example.com/metrics
-```
-
-The Pages function tries sources in order defined by `STORAGE_ORDER`:
-1. First storage backend (R2 or DO Spaces)
-2. Second storage backend (if configured)
-3. Failover origin (if enabled)
-4. Return 404
-
----
-
-## CDN Caching
-
-### Cloudflare CDN (via Pages)
-
-- **HTML:** 30 min cache, purged after each upload
-- **Static assets:** 24 hour cache
-- **Purge:** Automatic via `/_purge` endpoint after uploads
-
-### DigitalOcean Spaces
-
-| Mode | `DO_SPACES_CDN` | Behavior |
-|------|-----------------|----------|
-| **Origin** | `false` | Always fresh (default) |
-| **CDN** | `true` | Faster, up to ~1hr stale (no purge available) |
-
----
-
-## Troubleshooting
-
-**502 errors during upload:**
-- Normal with 128 parallel connections
-- Retries handle it automatically
-
-**DO Spaces "Access Denied":**
-- Check bucket is public or CDN is enabled
-- Verify DO_SPACES_URL matches your bucket
-
-**R2 connection failed:**
-- Verify credentials in config.env
-- Test: `~/bin/rclone ls r2:bucket --max-depth 1`
-
-**Pages function not using correct storage:**
-- Check `STORAGE_ORDER` in config.env
-- Redeploy: `./scripts/allium-deploy-cfpages.sh`
-- Check `X-Served-From` response header
-
-**DO Spaces serving stale content:**
-- If using CDN (`DO_SPACES_CDN=true`), switch to origin (`DO_SPACES_CDN=false`)
-- DO Spaces CDN has no cache purge - origin mode always serves fresh content
-
-**Search not working:**
-- Verify `search-index.json` exists in your output directory
-- Enable search index generation in allium (see allium docs)
-- Check browser console for 404 errors on `/search-index.json`
-- Search requires allium to generate the index file during build
-
----
-
-## Requirements
-
-- Debian/Ubuntu Linux
-- Python 3.8+
-- python3-jinja2
-- Cloudflare account (for Pages, optionally R2)
-- DigitalOcean account (optional, for Spaces)
-- ~4GB RAM (for allium processing)
-- ~10GB disk space
-
----
-
-## Credits
-
-- **Allium:** https://github.com/1aeo/allium
-- **Tor Project:** https://www.torproject.org
-- **Onionoo API:** https://onionoo.torproject.org
-
----
-
-## License
-
-Apache 2.0
+- **Host requirements:** Debian/Ubuntu Linux, Python 3.8+, `python3-jinja2`, Node.js 18+ with `corepack`, `jq`, `curl`, `flock`, GNU `timeout`, `sha256sum`, `rclone`.
+- **Accounts & capacity:** Cloudflare account (Workers Static Assets, R2, Pages), optional DigitalOcean Spaces, ~4 GB RAM, ~10 GB+ disk space (scaled by `LOCAL_KEEP_BACKUPS`).
+- **License:** [Apache 2.0](LICENSE)
