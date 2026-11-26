@@ -85,15 +85,16 @@ To stay well below the `100000`-asset per-version limit, `CHARTS_LAYOUT=charts` 
 ## Rollback
 
 - **Candidate or upload failure:** Automatic no-op; Cloudflare keeps the previous verified Worker version live at `100%`.
-- **Pause promotions immediately:** Set `CF_ASSETS_ALLOW_PROMOTION=false` (re-read on every `--promote`, including by a running job) and optionally `CF_ASSETS_REQUIRED=false`.
+- **Pause promotions immediately:** Set `CF_ASSETS_ALLOW_PROMOTION=false` in `config.env` (stops scripted `--promote` runs that have not yet read `config.env`, and optionally set `CF_ASSETS_REQUIRED=false`). Wait for any already-running `allium-deploy-update.sh` or `--promote` job to finish before running a direct rollback deploy, because an in-flight promotion that already read `true` will still execute `wrangler versions deploy`.
 
 ### Roll Back Worker Version
 
-Set `CF_ASSETS_ALLOW_PROMOTION=false` in `config.env` to freeze scripted `--promote` runs, pick a known-good UUID from `logs/cfassets-promotion-summary.tsv`, and verify chart routing and availability before running a direct `wrangler versions deploy` (which bypasses `--promote`):
+Pause promotions (`CF_ASSETS_ALLOW_PROMOTION=false`), wait until no scripted promotion is running, pick a known-good UUID from `logs/cfassets-promotion-summary.tsv`, and check chart routing and local state before running a direct `wrangler versions deploy` (which bypasses `--promote`):
 
 - **`CHARTS_LAYOUT=beside` versions:** Bundle charts inline, so rolling back the main Worker UUID is self-contained.
 - **`CHARTS_LAYOUT=charts` versions:** Deploying an older main Worker UUID restores only the main Worker, not older charts. If a `beside` build is currently live, `<host>/charts/*` may have been deleted; check and re-create it first with `./scripts/allium-deploy-charts-route.sh status` and `./scripts/allium-deploy-charts-route.sh create`, then verify the target UUID's linked `/charts/...` URLs resolve on the **production host** (`SITE_URL/charts/...`), not just a preview URL or `logs/cfcharts-live-charts`.
-- **If those charts are missing on production:** Do **not** deploy an older charts Worker version that drops charts still linked by the currently live main Worker or cached pages. Instead, either [roll back to Cloudflare Pages](#roll-back-to-cloudflare-pages) (`functions/[[path]].js` resolves chart keys across both layouts from DO/R2), or restore a matching backup snapshot into `OUTPUT_DIR`, temporarily set `CF_ASSETS_ALLOW_PROMOTION=true` for a recovery publish (which keeps `logs/cfcharts-live-charts` for the live version while uploading restored charts before promoting the main Worker), and set `CF_ASSETS_ALLOW_PROMOTION=false` afterward.
+- **Stale local markers after direct rollback:** A direct `wrangler versions deploy` does **not** run `record_promoted_layout` or `record_live_charts`, so `logs/charts-layout-promoted` and `logs/cfcharts-live-charts` remain stale (pointing at the pre-rollback version). Keep `CF_ASSETS_ALLOW_PROMOTION=false` while rolled back, and before re-enabling `CF_ASSETS_ALLOW_PROMOTION=true`, update `logs/charts-layout-promoted` (`charts` or `beside`), update `logs/cfcharts-live-charts` to list the live rolled-back main version's `charts/(relay|contact)/.../*.png` paths from a matching snapshot, and seed any missing PNGs into `CF_CHARTS_STAGE_DIR` (`keep_live_charts` only keeps files present in the previous stage) — or route traffic to Cloudflare Pages first until a full forward publish (`record_promoted_layout` and `record_live_charts`) completes cleanly.
+- **If needed charts are missing on production:** Do **not** deploy an older charts Worker version that drops charts still linked by the live main Worker or cached pages. Instead, either [roll back to Cloudflare Pages](#roll-back-to-cloudflare-pages) (removing `<host>/charts/*` as described below if Pages must serve the missing charts), or restore a matching snapshot into `OUTPUT_DIR`, update `logs/cfcharts-live-charts` / `logs/charts-layout-promoted` (and seed `CF_CHARTS_STAGE_DIR`) for the currently live main version first, temporarily set `CF_ASSETS_ALLOW_PROMOTION=true` for the recovery publish, and set `CF_ASSETS_ALLOW_PROMOTION=false` afterward.
 
 ```bash
 pnpm exec wrangler versions deploy <VERSION_ID>@100% --yes --config wrangler.assets.toml
@@ -101,5 +102,8 @@ pnpm exec wrangler versions deploy <VERSION_ID>@100% --yes --config wrangler.ass
 
 ### Roll Back to Cloudflare Pages
 
-- Delete the production `<host>/*` Worker route in Cloudflare so traffic routes directly to the Pages deployment kept warm behind `PAGES_PURGE_URL` (backed by every-build DO Spaces and daily R2).
-- Keep `<host>/charts/*` active while any live or cached pages link to `/charts/` (or until a `beside` build is live and `logs/charts-layout-promoted` reflects `beside`).
+- **Verify Pages can serve required charts first:** Before routing `/charts/*` to Pages, confirm `PAGES_PURGE_URL` / DO Spaces / R2 holds and serves the required `charts/...` (or alias `relay/`/`contact/`) keys (`functions/[[path]].js` resolves both layouts across DO Spaces and R2; restore a backup snapshot to DO/R2 first if needed).
+- **Delete the `<host>/*` Worker route** in Cloudflare so traffic routes directly to the Pages deployment kept warm behind `PAGES_PURGE_URL`.
+- **Handle `<host>/charts/*` by case:**
+  - If rolling back because charts are missing from the active charts Worker, **also delete `<host>/charts/*`** in the Cloudflare dashboard or via the Cloudflare API (`./scripts/allium-deploy-charts-route.sh delete` refuses while `CHARTS_LAYOUT=charts` or `logs/charts-layout-promoted` is `charts`) so `/charts/...` requests reach `functions/[[path]].js` instead of returning `404` from the charts Worker.
+  - Keep `<host>/charts/*` active only when the active charts Worker still serves every chart needed by live and cached pages (until a `beside` build is live and `logs/charts-layout-promoted` reflects `beside`).
