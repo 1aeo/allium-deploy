@@ -32,21 +32,56 @@ function listMarkdownFiles(dir = root) {
   return results.sort();
 }
 
-function extractLinkTargets(cleaned) {
+const REF_DEF_RE = /^[ \t]{0,3}\[([^\]]+)\]:[ \t]*(?:<([^>\n]+)>|([^\s\n]+))[^\n]*$/gm;
+
+function extractInlineDestination(rawTarget) {
+  const trimmed = rawTarget.trim();
+  if (trimmed.startsWith('<') && trimmed.includes('>')) {
+    return trimmed.slice(1, trimmed.indexOf('>')).trim();
+  }
+  return trimmed.split(/\s+/)[0] || '';
+}
+
+function normalizeLabel(label) {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
   const targets = [];
   for (const match of cleaned.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
-    targets.push(match[1]);
+    const dest = extractInlineDestination(match[1]);
+    if (dest) targets.push(dest);
   }
-  for (const match of cleaned.matchAll(/^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:<([^>\n]+)>|([^\s\n]+))/gm)) {
-    targets.push(match[1] ?? match[2]);
+
+  const defs = new Map();
+  const body = cleaned.replace(REF_DEF_RE, (_, label, angleTarget, bareTarget) => {
+    const key = normalizeLabel(label);
+    const dest = (angleTarget ?? bareTarget).trim();
+    if (key && dest && !defs.has(key)) defs.set(key, dest);
+    return '';
+  });
+
+  if (includeUnusedDefs) {
+    targets.push(...defs.values());
+    return targets;
+  }
+
+  const usedLabels = new Set();
+  for (const match of body.matchAll(/\[([^\]]*)\]\[([^\]]*)\]/g)) {
+    usedLabels.add(normalizeLabel(match[2] || match[1]));
+  }
+  for (const match of body.matchAll(/\[([^\]]+)\](?![(\[:])/g)) {
+    usedLabels.add(normalizeLabel(match[1]));
+  }
+  for (const [label, dest] of defs) {
+    if (usedLabels.has(label)) targets.push(dest);
   }
   return targets;
 }
 
-function normalizeRelativeTarget(rawTarget) {
-  const target = rawTarget.trim().split(/\s+/)[0].replace(/^<|>$/g, '');
-  if (!target || /^(#|https?:\/\/|mailto:|file:\/\/)/.test(target)) return null;
-  const targetPath = target.split('#')[0].split('?')[0];
+function normalizeRelativeTarget(dest) {
+  if (!dest || /^(#|https?:\/\/|mailto:|file:\/\/)/.test(dest)) return null;
+  const targetPath = dest.split('#')[0].split('?')[0];
   return targetPath || null;
 }
 
@@ -150,7 +185,7 @@ test('every docs/*.md file is linked from README.md', () => {
   assert.ok(docFiles.length > 0, 'expected files in docs/');
 
   const linkDestinations = new Set();
-  for (const rawTarget of extractLinkTargets(stripCode(readme))) {
+  for (const rawTarget of extractLinkTargets(stripCode(readme), { includeUnusedDefs: false })) {
     const targetPath = normalizeRelativeTarget(rawTarget);
     if (!targetPath) continue;
     const rel = path.relative(root, path.resolve(root, targetPath)).split(path.sep).join('/');
