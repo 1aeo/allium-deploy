@@ -32,6 +32,24 @@ function listMarkdownFiles(dir = root) {
   return results.sort();
 }
 
+function extractLinkTargets(cleaned) {
+  const targets = [];
+  for (const match of cleaned.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+    targets.push(match[1]);
+  }
+  for (const match of cleaned.matchAll(/^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:<([^>\n]+)>|([^\s\n]+))/gm)) {
+    targets.push(match[1] ?? match[2]);
+  }
+  return targets;
+}
+
+function normalizeRelativeTarget(rawTarget) {
+  const target = rawTarget.trim().split(/\s+/)[0].replace(/^<|>$/g, '');
+  if (!target || /^(#|https?:\/\/|mailto:|file:\/\/)/.test(target)) return null;
+  const targetPath = target.split('#')[0].split('?')[0];
+  return targetPath || null;
+}
+
 test('all Markdown relative links resolve', () => {
   const mdFiles = listMarkdownFiles();
   assert.ok(mdFiles.length > 0, 'expected Markdown files');
@@ -39,14 +57,12 @@ test('all Markdown relative links resolve', () => {
   const broken = [];
   for (const mdFile of mdFiles) {
     const cleaned = stripCode(fs.readFileSync(mdFile, 'utf8'));
-    for (const match of cleaned.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
-      const target = match[1].trim().split(/\s+/)[0].replace(/^<|>$/g, '');
-      if (!target || /^(#|https?:\/\/|mailto:|file:\/\/)/.test(target)) continue;
-      const targetPath = target.split('#')[0].split('?')[0];
+    for (const rawTarget of extractLinkTargets(cleaned)) {
+      const targetPath = normalizeRelativeTarget(rawTarget);
       if (!targetPath) continue;
       const resolved = path.resolve(path.dirname(mdFile), targetPath);
       if (!fs.existsSync(resolved)) {
-        broken.push(`${path.relative(root, mdFile)} -> ${match[1]}`);
+        broken.push(`${path.relative(root, mdFile)} -> ${rawTarget}`);
       }
     }
   }
@@ -109,12 +125,19 @@ test('README pinned Wrangler and Node versions match package.json', () => {
   const wranglerVer = pkg.devDependencies.wrangler;
   const nodeVer = pkg.devEngines.runtime.version;
 
-  assert.ok(readme.includes(wranglerVer), `README.md must reference Wrangler ${wranglerVer}`);
-  assert.ok(
-    readme.includes(`patches/wrangler@${wranglerVer}.patch`),
-    `README.md must reference patches/wrangler@${wranglerVer}.patch`,
-  );
-  assert.ok(readme.includes(nodeVer), `README.md must reference Node.js ${nodeVer}`);
+  const wranglerMatch = readme.match(/Wrangler \(`([^`]+)`\)/);
+  assert.ok(wranglerMatch, 'README.md must document pinned Wrangler (`<version>`)');
+  assert.equal(wranglerMatch[1], wranglerVer, 'README.md Wrangler pin mismatch');
+
+  const patchRefs = [...readme.matchAll(/patches\/wrangler@([^)\s`]+)\.patch/g)];
+  assert.ok(patchRefs.length > 0, 'README.md must reference patches/wrangler@<version>.patch');
+  for (const m of patchRefs) {
+    assert.equal(m[1], wranglerVer, 'README.md patch path Wrangler version mismatch');
+  }
+
+  const nodeMatch = readme.match(/Node\.js \(`([^`]+)` via `devEngines\.runtime`\)/);
+  assert.ok(nodeMatch, 'README.md must document pinned Node.js (`<version>` via `devEngines.runtime`)');
+  assert.equal(nodeMatch[1], nodeVer, 'README.md Node.js version mismatch');
 });
 
 test('every docs/*.md file is linked from README.md', () => {
@@ -126,6 +149,14 @@ test('every docs/*.md file is linked from README.md', () => {
     .sort();
   assert.ok(docFiles.length > 0, 'expected files in docs/');
 
-  const unlinked = docFiles.filter((name) => !readme.includes(`docs/${name}`));
+  const linkDestinations = new Set();
+  for (const rawTarget of extractLinkTargets(stripCode(readme))) {
+    const targetPath = normalizeRelativeTarget(rawTarget);
+    if (!targetPath) continue;
+    const rel = path.relative(root, path.resolve(root, targetPath)).split(path.sep).join('/');
+    linkDestinations.add(rel);
+  }
+
+  const unlinked = docFiles.filter((name) => !linkDestinations.has(`docs/${name}`));
   assert.deepEqual(unlinked, [], `docs/*.md files not linked from README.md: ${unlinked.join(', ')}`);
 });
