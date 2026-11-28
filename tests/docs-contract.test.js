@@ -32,14 +32,17 @@ function listMarkdownFiles(dir = root) {
   return results.sort();
 }
 
-const REF_DEF_RE = /^[ \t]{0,3}\[([^\]]+)\]:[ \t]*(?:<([^>\n]+)>|([^\s\n]+))[^\n]*$/gm;
+const INLINE_LINK_RE =
+  /\[[^\]]*\]\([ \t]*(?:<([^>\n]+)>(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?[ \t]*|((?:[^()\s\n]|\([^()\s\n]*\))+)(?:[ \t]+(?:"[^"]*"|'[^']*'))?[ \t]*)\)/g;
+const REF_DEF_RE =
+  /^[ \t]{0,3}\[([^\]]+)\]:[ \t]*(?:\r?\n[ \t]*)?(?:<([^>\n]+)>|([^\s\n]+))[^\n]*$/gm;
 
-function extractInlineDestination(rawTarget) {
-  const trimmed = rawTarget.trim();
-  if (trimmed.startsWith('<') && trimmed.includes('>')) {
-    return trimmed.slice(1, trimmed.indexOf('>')).trim();
+function isEscaped(text, index) {
+  let backslashes = 0;
+  for (let pos = index - 1; pos >= 0 && text[pos] === '\\'; pos -= 1) {
+    backslashes += 1;
   }
-  return trimmed.split(/\s+/)[0] || '';
+  return backslashes % 2 === 1;
 }
 
 function normalizeLabel(label) {
@@ -48,13 +51,15 @@ function normalizeLabel(label) {
 
 function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
   const targets = [];
-  for (const match of cleaned.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
-    const dest = extractInlineDestination(match[1]);
+  for (const match of cleaned.matchAll(INLINE_LINK_RE)) {
+    if (isEscaped(cleaned, match.index)) continue;
+    const dest = (match[1] ?? match[2] ?? '').trim();
     if (dest) targets.push(dest);
   }
 
   const defs = new Map();
-  const body = cleaned.replace(REF_DEF_RE, (_, label, angleTarget, bareTarget) => {
+  const body = cleaned.replace(REF_DEF_RE, (full, label, angleTarget, bareTarget, offset) => {
+    if (isEscaped(cleaned, offset)) return full;
     const key = normalizeLabel(label);
     const dest = (angleTarget ?? bareTarget).trim();
     if (key && dest && !defs.has(key)) defs.set(key, dest);
@@ -68,9 +73,11 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
 
   const usedLabels = new Set();
   for (const match of body.matchAll(/\[([^\]]*)\]\[([^\]]*)\]/g)) {
+    if (isEscaped(body, match.index)) continue;
     usedLabels.add(normalizeLabel(match[2] || match[1]));
   }
   for (const match of body.matchAll(/\[([^\]]+)\](?![(\[:])/g)) {
+    if (isEscaped(body, match.index)) continue;
     usedLabels.add(normalizeLabel(match[1]));
   }
   for (const [label, dest] of defs) {
