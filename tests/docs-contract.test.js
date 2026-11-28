@@ -44,8 +44,44 @@ function normalizeLabel(label) {
   return label.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+const ESCAPABLE_PUNCT_RE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+
+function unescapeDestination(dest) {
+  return dest.replace(ESCAPABLE_PUNCT_RE, '$1');
+}
+
+function skipOptionalNewlineSpaces(text, pos) {
+  while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
+  if (pos < text.length && text[pos] === '\r') pos += 1;
+  if (pos < text.length && text[pos] === '\n') {
+    pos += 1;
+    while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
+  }
+  return pos;
+}
+
+function hasMatchingOpenBracket(text, closeIdx) {
+  let depth = 1;
+  for (let pos = closeIdx - 1; pos >= 0; pos -= 1) {
+    const ch = text[pos];
+    if (ch === '\n') {
+      let prev = pos - 1;
+      if (prev >= 0 && text[prev] === '\r') prev -= 1;
+      while (prev >= 0 && (text[prev] === ' ' || text[prev] === '\t')) prev -= 1;
+      if (prev >= 0 && text[prev] === '\n') return false;
+    }
+    if (ch === ']' && !isEscaped(text, pos)) {
+      depth += 1;
+    } else if (ch === '[' && !isEscaped(text, pos)) {
+      depth -= 1;
+      if (depth === 0) return true;
+    }
+  }
+  return false;
+}
+
 function skipOptionalInlineTitle(text, pos) {
-  while (pos < text.length && /[ \t\r\n]/.test(text[pos])) pos += 1;
+  pos = skipOptionalNewlineSpaces(text, pos);
   if (pos >= text.length || text[pos] === ')') return pos;
   const opener = text[pos];
   if (opener !== '"' && opener !== "'" && opener !== '(') return -1;
@@ -59,9 +95,7 @@ function skipOptionalInlineTitle(text, pos) {
     }
     if (opener === '(' && ch === '(') return -1;
     if (ch === closer) {
-      pos += 1;
-      while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
-      return pos;
+      return skipOptionalNewlineSpaces(text, pos + 1);
     }
     pos += 1;
   }
@@ -69,13 +103,7 @@ function skipOptionalInlineTitle(text, pos) {
 }
 
 function parseInlineLink(text, openParenPos) {
-  let pos = openParenPos + 1;
-  while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
-  if (text[pos] === '\r') pos += 1;
-  if (text[pos] === '\n') {
-    pos += 1;
-    while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
-  }
+  let pos = skipOptionalNewlineSpaces(text, openParenPos + 1);
   if (pos >= text.length) return null;
 
   let dest = '';
@@ -90,7 +118,7 @@ function parseInlineLink(text, openParenPos) {
       pos += 1;
     }
     if (pos >= text.length || text[pos] !== '>') return null;
-    dest = text.slice(start, pos).trim();
+    dest = unescapeDestination(text.slice(start, pos).trim());
     pos += 1;
   } else {
     const start = pos;
@@ -110,7 +138,7 @@ function parseInlineLink(text, openParenPos) {
       pos += 1;
     }
     if (depth !== 0 || pos === start) return null;
-    dest = text.slice(start, pos).trim();
+    dest = unescapeDestination(text.slice(start, pos).trim());
   }
 
   pos = skipOptionalInlineTitle(text, pos);
@@ -172,14 +200,14 @@ function parseRefDefinition(lines, idx) {
       pos += 1;
     }
     if (pos >= rest.length) return null;
-    dest = rest.slice(1, pos).trim();
+    dest = unescapeDestination(rest.slice(1, pos).trim());
     tail = rest.slice(pos + 1).trim();
   } else {
     const wsIdx = rest.search(/[ \t]/);
     if (wsIdx === -1) {
-      dest = rest;
+      dest = unescapeDestination(rest);
     } else {
-      dest = rest.slice(0, wsIdx);
+      dest = unescapeDestination(rest.slice(0, wsIdx));
       tail = rest.slice(wsIdx).trim();
     }
   }
@@ -201,7 +229,7 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
   for (let idx = 0; idx < cleaned.length; ) {
     const closeIdx = cleaned.indexOf('](', idx);
     if (closeIdx === -1) break;
-    if (isEscaped(cleaned, closeIdx)) {
+    if (isEscaped(cleaned, closeIdx) || !hasMatchingOpenBracket(cleaned, closeIdx)) {
       idx = closeIdx + 2;
       continue;
     }
