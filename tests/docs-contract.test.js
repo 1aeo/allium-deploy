@@ -299,14 +299,17 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
         if (para[i + 1] === '[') {
           const close2 = findClosingBracket(para, i + 2);
           if (close2 !== -1) {
-            hasBracketedRef = true;
-            const rawLabel = para.slice(i + 2, close2) || para.slice(opener.contentStart, i);
-            const key = normalizeLabel(rawLabel);
-            if (defs.has(key)) {
-              usedLabels.add(key);
-              if (!opener.isImage) deactivateOuterLinks(openers);
-              i = close2 + 1;
-              continue;
+            const secondLabel = para.slice(i + 2, close2);
+            if (secondLabel === '' || normalizeLabel(secondLabel) !== '') {
+              hasBracketedRef = true;
+              const rawLabel = secondLabel || para.slice(opener.contentStart, i);
+              const key = normalizeLabel(rawLabel);
+              if (defs.has(key)) {
+                usedLabels.add(key);
+                if (!opener.isImage) deactivateOuterLinks(openers);
+                i = close2 + 1;
+                continue;
+              }
             }
           }
         }
