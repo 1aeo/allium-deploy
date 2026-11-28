@@ -44,5 +44,8 @@ jobs:
       - name: Enable pnpm
         run: corepack enable
 
+      - name: Check documentation contracts
+        run: node --test tests/docs-contract.test.js
+
       - name: Run behavior tests
         run: pnpm test
