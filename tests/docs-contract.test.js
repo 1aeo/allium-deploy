@@ -44,10 +44,29 @@ function normalizeLabel(label) {
   return label.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-const ESCAPABLE_PUNCT_RE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+const NAMED_ENTITIES = new Map([
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+]);
+
+const DEST_UNESCAPE_RE =
+  /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])|&#(\d{1,7});|&#[xX]([0-9a-fA-F]{1,6});|&([A-Za-z][A-Za-z0-9]{1,31});/g;
 
 function unescapeDestination(dest) {
-  return dest.replace(ESCAPABLE_PUNCT_RE, '$1');
+  return dest.replace(DEST_UNESCAPE_RE, (full, punct, dec, hex, named) => {
+    if (punct) return punct;
+    if (dec || hex) {
+      const code = Number.parseInt(dec || hex, dec ? 10 : 16);
+      if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
+        return '\uFFFD';
+      }
+      return String.fromCodePoint(code);
+    }
+    return NAMED_ENTITIES.get(named.toLowerCase()) ?? full;
+  });
 }
 
 function skipOptionalNewlineSpaces(text, pos) {
@@ -58,26 +77,6 @@ function skipOptionalNewlineSpaces(text, pos) {
     while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
   }
   return pos;
-}
-
-function hasMatchingOpenBracket(text, closeIdx) {
-  let depth = 1;
-  for (let pos = closeIdx - 1; pos >= 0; pos -= 1) {
-    const ch = text[pos];
-    if (ch === '\n') {
-      let prev = pos - 1;
-      if (prev >= 0 && text[prev] === '\r') prev -= 1;
-      while (prev >= 0 && (text[prev] === ' ' || text[prev] === '\t')) prev -= 1;
-      if (prev >= 0 && text[prev] === '\n') return false;
-    }
-    if (ch === ']' && !isEscaped(text, pos)) {
-      depth += 1;
-    } else if (ch === '[' && !isEscaped(text, pos)) {
-      depth -= 1;
-      if (depth === 0) return true;
-    }
-  }
-  return false;
 }
 
 function skipOptionalInlineTitle(text, pos) {
@@ -224,24 +223,26 @@ function parseRefDefinition(lines, idx) {
   return { key, dest, nextIdx };
 }
 
-function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
-  const targets = [];
-  for (let idx = 0; idx < cleaned.length; ) {
-    const closeIdx = cleaned.indexOf('](', idx);
-    if (closeIdx === -1) break;
-    if (isEscaped(cleaned, closeIdx) || !hasMatchingOpenBracket(cleaned, closeIdx)) {
-      idx = closeIdx + 2;
+function findClosingBracket(text, startPos) {
+  for (let pos = startPos; pos < text.length; pos += 1) {
+    const ch = text[pos];
+    if (ch === '\\' && pos + 1 < text.length) {
+      pos += 1;
       continue;
     }
-    const parsed = parseInlineLink(cleaned, closeIdx + 1);
-    if (parsed) {
-      if (parsed.dest) targets.push(parsed.dest);
-      idx = parsed.endPos;
-    } else {
-      idx = closeIdx + 2;
-    }
+    if (ch === '[') return -1;
+    if (ch === ']') return pos;
   }
+  return -1;
+}
 
+function deactivateOuterLinks(openers) {
+  for (const entry of openers) {
+    if (!entry.isImage) entry.active = false;
+  }
+}
+
+function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
   const defs = new Map();
   const bodyLines = [];
   const lines = cleaned.split(/\r?\n/);
@@ -256,23 +257,77 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
     }
   }
 
-  if (includeUnusedDefs) {
-    targets.push(...defs.values());
-    return targets;
+  const targets = [];
+  const usedLabels = new Set();
+  for (const para of bodyLines.join('\n').split(/\n[ \t]*\n/)) {
+    const openers = [];
+    for (let i = 0; i < para.length; ) {
+      if (para[i] === '\\' && i + 1 < para.length) {
+        i += 2;
+        continue;
+      }
+      if (para[i] === '!' && para[i + 1] === '[') {
+        openers.push({ isImage: true, contentStart: i + 2, active: true });
+        i += 2;
+        continue;
+      }
+      if (para[i] === '[') {
+        openers.push({ isImage: false, contentStart: i + 1, active: true });
+        i += 1;
+        continue;
+      }
+      if (para[i] === ']') {
+        if (openers.length === 0) {
+          i += 1;
+          continue;
+        }
+        const opener = openers.pop();
+        if (!opener.active) {
+          i += 1;
+          continue;
+        }
+        if (para[i + 1] === '(') {
+          const parsed = parseInlineLink(para, i + 1);
+          if (parsed) {
+            if (parsed.dest) targets.push(parsed.dest);
+            if (!opener.isImage) deactivateOuterLinks(openers);
+            i = parsed.endPos;
+            continue;
+          }
+        }
+        if (para[i + 1] === '[') {
+          const close2 = findClosingBracket(para, i + 2);
+          if (close2 !== -1) {
+            const rawLabel = para.slice(i + 2, close2) || para.slice(opener.contentStart, i);
+            const key = normalizeLabel(rawLabel);
+            if (defs.has(key)) {
+              usedLabels.add(key);
+              if (!opener.isImage) deactivateOuterLinks(openers);
+              i = close2 + 1;
+              continue;
+            }
+          }
+        }
+        if (para[i + 1] !== '(' && para[i + 1] !== '[') {
+          const key = normalizeLabel(para.slice(opener.contentStart, i));
+          if (defs.has(key)) {
+            usedLabels.add(key);
+            if (!opener.isImage) deactivateOuterLinks(openers);
+          }
+        }
+        i += 1;
+        continue;
+      }
+      i += 1;
+    }
   }
 
-  const body = bodyLines.join('\n');
-  const usedLabels = new Set();
-  for (const match of body.matchAll(/\[([^\]]*)\]\[([^\]]*)\]/g)) {
-    if (isEscaped(body, match.index)) continue;
-    usedLabels.add(normalizeLabel(match[2] || match[1]));
-  }
-  for (const match of body.matchAll(/\[([^\]]+)\](?![(\[:])/g)) {
-    if (isEscaped(body, match.index)) continue;
-    usedLabels.add(normalizeLabel(match[1]));
-  }
-  for (const [label, dest] of defs) {
-    if (usedLabels.has(label)) targets.push(dest);
+  if (includeUnusedDefs) {
+    targets.push(...defs.values());
+  } else {
+    for (const [label, dest] of defs) {
+      if (usedLabels.has(label)) targets.push(dest);
+    }
   }
   return targets;
 }
