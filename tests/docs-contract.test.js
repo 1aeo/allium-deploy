@@ -32,11 +32,6 @@ function listMarkdownFiles(dir = root) {
   return results.sort();
 }
 
-const INLINE_LINK_RE =
-  /\[[^\]]*\]\([ \t]*(?:<([^>\n]+)>(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?[ \t]*|((?:[^()\s\n]|\([^()\s\n]*\))+)(?:[ \t]+(?:"[^"]*"|'[^']*'))?[ \t]*)\)/g;
-const REF_DEF_RE =
-  /^[ \t]{0,3}\[([^\]]+)\]:[ \t]*(?:\r?\n[ \t]*)?(?:<([^>\n]+)>|([^\s\n]+))[^\n]*$/gm;
-
 function isEscaped(text, index) {
   let backslashes = 0;
   for (let pos = index - 1; pos >= 0 && text[pos] === '\\'; pos -= 1) {
@@ -49,28 +44,196 @@ function normalizeLabel(label) {
   return label.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function skipOptionalInlineTitle(text, pos) {
+  while (pos < text.length && /[ \t\r\n]/.test(text[pos])) pos += 1;
+  if (pos >= text.length || text[pos] === ')') return pos;
+  const opener = text[pos];
+  if (opener !== '"' && opener !== "'" && opener !== '(') return -1;
+  const closer = opener === '(' ? ')' : opener;
+  pos += 1;
+  while (pos < text.length) {
+    const ch = text[pos];
+    if (ch === '\\' && pos + 1 < text.length) {
+      pos += 2;
+      continue;
+    }
+    if (opener === '(' && ch === '(') return -1;
+    if (ch === closer) {
+      pos += 1;
+      while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
+      return pos;
+    }
+    pos += 1;
+  }
+  return -1;
+}
+
+function parseInlineLink(text, openParenPos) {
+  let pos = openParenPos + 1;
+  while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
+  if (text[pos] === '\r') pos += 1;
+  if (text[pos] === '\n') {
+    pos += 1;
+    while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t')) pos += 1;
+  }
+  if (pos >= text.length) return null;
+
+  let dest = '';
+  if (text[pos] === '<') {
+    pos += 1;
+    const start = pos;
+    while (pos < text.length && text[pos] !== '>' && text[pos] !== '\n') {
+      if (text[pos] === '\\' && pos + 1 < text.length) {
+        pos += 2;
+        continue;
+      }
+      pos += 1;
+    }
+    if (pos >= text.length || text[pos] !== '>') return null;
+    dest = text.slice(start, pos).trim();
+    pos += 1;
+  } else {
+    const start = pos;
+    let depth = 0;
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') break;
+      if (ch === '\\' && pos + 1 < text.length) {
+        pos += 2;
+        continue;
+      }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+      pos += 1;
+    }
+    if (depth !== 0 || pos === start) return null;
+    dest = text.slice(start, pos).trim();
+  }
+
+  pos = skipOptionalInlineTitle(text, pos);
+  if (pos < 0 || pos >= text.length || text[pos] !== ')') return null;
+  return { dest, endPos: pos + 1 };
+}
+
+function parseTitleLines(lines, curIdx, tail) {
+  if (!tail) return curIdx + 1;
+  const opener = tail[0];
+  if (opener !== '"' && opener !== "'" && opener !== '(') return -1;
+  const closer = opener === '(' ? ')' : opener;
+
+  let pos = 1;
+  let line = tail;
+  while (curIdx < lines.length) {
+    while (pos < line.length) {
+      const ch = line[pos];
+      if (ch === '\\' && pos + 1 < line.length) {
+        pos += 2;
+        continue;
+      }
+      if (opener === '(' && ch === '(') return -1;
+      if (ch === closer) {
+        return line.slice(pos + 1).trim() === '' ? curIdx + 1 : -1;
+      }
+      pos += 1;
+    }
+    curIdx += 1;
+    if (curIdx >= lines.length || lines[curIdx].trim() === '') return -1;
+    line = lines[curIdx];
+    pos = 0;
+  }
+  return -1;
+}
+
+function parseRefDefinition(lines, idx) {
+  const match = lines[idx].match(/^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*(.*)$/);
+  if (!match || isEscaped(lines[idx], lines[idx].indexOf('['))) return null;
+
+  const key = normalizeLabel(match[1]);
+  let cur = idx;
+  let rest = match[2].trim();
+  if (!rest) {
+    if (cur + 1 >= lines.length || lines[cur + 1].trim() === '') return null;
+    cur += 1;
+    rest = lines[cur].trim();
+  }
+
+  let dest = '';
+  let tail = '';
+  if (rest.startsWith('<')) {
+    let pos = 1;
+    while (pos < rest.length && rest[pos] !== '>') {
+      if (rest[pos] === '\\' && pos + 1 < rest.length) {
+        pos += 2;
+        continue;
+      }
+      pos += 1;
+    }
+    if (pos >= rest.length) return null;
+    dest = rest.slice(1, pos).trim();
+    tail = rest.slice(pos + 1).trim();
+  } else {
+    const wsIdx = rest.search(/[ \t]/);
+    if (wsIdx === -1) {
+      dest = rest;
+    } else {
+      dest = rest.slice(0, wsIdx);
+      tail = rest.slice(wsIdx).trim();
+    }
+  }
+  if (!key || !dest) return null;
+
+  let nextIdx = cur + 1;
+  if (tail) {
+    nextIdx = parseTitleLines(lines, cur, tail);
+    if (nextIdx === -1) return null;
+  } else if (cur + 1 < lines.length && /^[ \t]*["'(]/.test(lines[cur + 1])) {
+    const titleEnd = parseTitleLines(lines, cur + 1, lines[cur + 1].trim());
+    if (titleEnd !== -1) nextIdx = titleEnd;
+  }
+  return { key, dest, nextIdx };
+}
+
 function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
   const targets = [];
-  for (const match of cleaned.matchAll(INLINE_LINK_RE)) {
-    if (isEscaped(cleaned, match.index)) continue;
-    const dest = (match[1] ?? match[2] ?? '').trim();
-    if (dest) targets.push(dest);
+  for (let idx = 0; idx < cleaned.length; ) {
+    const closeIdx = cleaned.indexOf('](', idx);
+    if (closeIdx === -1) break;
+    if (isEscaped(cleaned, closeIdx)) {
+      idx = closeIdx + 2;
+      continue;
+    }
+    const parsed = parseInlineLink(cleaned, closeIdx + 1);
+    if (parsed) {
+      if (parsed.dest) targets.push(parsed.dest);
+      idx = parsed.endPos;
+    } else {
+      idx = closeIdx + 2;
+    }
   }
 
   const defs = new Map();
-  const body = cleaned.replace(REF_DEF_RE, (full, label, angleTarget, bareTarget, offset) => {
-    if (isEscaped(cleaned, offset)) return full;
-    const key = normalizeLabel(label);
-    const dest = (angleTarget ?? bareTarget).trim();
-    if (key && dest && !defs.has(key)) defs.set(key, dest);
-    return '';
-  });
+  const bodyLines = [];
+  const lines = cleaned.split(/\r?\n/);
+  for (let i = 0; i < lines.length; ) {
+    const parsedDef = parseRefDefinition(lines, i);
+    if (parsedDef) {
+      if (!defs.has(parsedDef.key)) defs.set(parsedDef.key, parsedDef.dest);
+      i = parsedDef.nextIdx;
+    } else {
+      bodyLines.push(lines[i]);
+      i += 1;
+    }
+  }
 
   if (includeUnusedDefs) {
     targets.push(...defs.values());
     return targets;
   }
 
+  const body = bodyLines.join('\n');
   const usedLabels = new Set();
   for (const match of body.matchAll(/\[([^\]]*)\]\[([^\]]*)\]/g)) {
     if (isEscaped(body, match.index)) continue;
