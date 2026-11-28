@@ -295,9 +295,11 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
             continue;
           }
         }
+        let hasBracketedRef = false;
         if (para[i + 1] === '[') {
           const close2 = findClosingBracket(para, i + 2);
           if (close2 !== -1) {
+            hasBracketedRef = true;
             const rawLabel = para.slice(i + 2, close2) || para.slice(opener.contentStart, i);
             const key = normalizeLabel(rawLabel);
             if (defs.has(key)) {
@@ -308,7 +310,7 @@ function extractLinkTargets(cleaned, { includeUnusedDefs = true } = {}) {
             }
           }
         }
-        if (para[i + 1] !== '(' && para[i + 1] !== '[') {
+        if (!hasBracketedRef) {
           const key = normalizeLabel(para.slice(opener.contentStart, i));
           if (defs.has(key)) {
             usedLabels.add(key);
